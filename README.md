@@ -1,5 +1,3 @@
-
-````md
 # MTPro Monitor Bot
 A fully automated MTProto monitoring & management bot with an interactive shell installer.
 
