@@ -137,18 +137,16 @@ Bot installation directory
 
 [2] Install base packages
 Runs:
-
-bash
-Copy code
+```
 apt update
 apt install -y git curl nodejs npm
+```
 [3] Install pm2
-bash
-Copy code
+```
 npm install -g pm2
+```
 2️⃣ Bot Menu
-css
-Copy code
+```
 Bot Menu
 [1] Install / Update MTPro Monitor Bot
 [2] Set / Change Bot Token
@@ -158,6 +156,7 @@ Bot Menu
 [6] Show pm2 status
 [7] Manual Edit (index.js, scripts, usage.json)
 [0] Back to Main Menu
+```
 [1] Install / Update Bot
 Creates install path
 
