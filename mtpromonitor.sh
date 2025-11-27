@@ -237,7 +237,7 @@ start_bot() {
   echo -e "${CYAN}Starting bot with pm2...${RESET}"
   (cd "$INSTALL_DIR" && pm2 start bot/index.js --name "$SERVICE_NAME")
   pm2 save >/dev/null 2>&1
-  echo -e "${GREEN}Bot is now managed by pm2 as: ${WHITE}$SERVICE_NAME${RESET}"`
+  echo -e "${GREEN}Bot is now managed by pm2 as: ${WHITE}$SERVICE_NAME${RESET}"
   echo -e "${YELLOW}To see logs: ${WHITE}pm2 logs $SERVICE_NAME${RESET}"
 }
 
