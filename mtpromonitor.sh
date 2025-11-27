@@ -40,11 +40,11 @@ short_status_header() {
     fi
   done
 
-  # Proxy status
+  # Proxy status (stats endpoint or process names)
   local proxy_status="UNKNOWN"
   if has_cmd curl && curl -s --max-time 1 http://127.0.0.1:8888/stats >/dev/null 2>&1; then
     proxy_status="ON"
-  elif pgrep -f "mtproto" >/dev/null 2>&1 || pgrep -f "mtproxy" >/dev/null 2>&1; then
+  elif pgrep -fi "mtproto|mtproxy|mtprotoproxy|mtg|mtgproxy" >/dev/null 2>&1; then
     proxy_status="RUNNING(no stats)"
   else
     proxy_status="OFF"
@@ -104,8 +104,8 @@ check_status() {
   fi
 
   # MTProxy process (rough)
-  if pgrep -f "mtproto" >/dev/null 2>&1 || pgrep -f "mtproxy" >/dev/null 2>&1; then
-    echo -e " ${WHITE}• MTProxy:    ${GREEN}✓ Process detected${RESET}  ${YELLOW}~10–20 MB binary (typical)${RESET}"
+  if pgrep -fi "mtproto|mtproxy|mtprotoproxy|mtg|mtgproxy" >/dev/null 2>&1; then
+    echo -e " ${WHITE}• MTProxy:    ${GREEN}✓ Process detected${RESET}  ${YELLOW}(port and binary depend on your setup)${RESET}"
   else
     echo -e " ${WHITE}• MTProxy:    ${RED}✗ Not detected${RESET}       ${YELLOW}(optional, but required for full stats)${RESET}"
   fi
@@ -212,10 +212,14 @@ set_token_in_index() {
     return 1
   fi
 
-  # We assume the file contains: const TOKEN = "TOKEN_HERE";
-  sed -i "s|const TOKEN = \"TOKEN_HERE\";|const TOKEN = \"$BOT_TOKEN_VALUE\";|" "$target_file"
-
-  echo -e "${GREEN}Bot token has been written into bot/index.js${RESET}"
+  # Replace any TOKEN constant line with the new value
+  if grep -q 'const TOKEN = ' "$target_file"; then
+    sed -i "s|const TOKEN = \".*\";|const TOKEN = \"$BOT_TOKEN_VALUE\";|" "$target_file"
+    echo -e "${GREEN}Bot token has been written into bot/index.js${RESET}"
+  else
+    echo -e "${YELLOW}Could not find TOKEN constant in bot/index.js. Please update it manually.${RESET}"
+    return 1
+  fi
 }
 
 # ===== Install & update MTPro Monitor Bot =====
@@ -239,15 +243,41 @@ install_or_update_bot() {
     git clone https://github.com/h4m1dr/MTproMonitorbot.git "$INSTALL_DIR"
   fi
 
+  # Detect existing token before touching it
+  local target_file="$INSTALL_DIR/bot/index.js"
+  local had_token_before="NO"
+  if [ -f "$target_file" ]; then
+    if grep -q 'const TOKEN = "' "$target_file"; then
+      if ! grep -q 'const TOKEN = "TOKEN_HERE"' "$target_file"; then
+        had_token_before="YES"
+      fi
+    fi
+  fi
+
   # npm install
   echo -e "${CYAN}Running npm install...${RESET}"
   (cd "$INSTALL_DIR" && npm install)
 
-  # Ask for bot token
-  if ask_bot_token; then
-    set_token_in_index
+  # Decide what to do with token
+  if [ "$had_token_before" = "YES" ]; then
+    echo -e "${YELLOW}Existing bot token detected in bot/index.js.${RESET}"
+    echo -ne "${CYAN}Keep current token? [Y/n]: ${RESET}"
+    read -r ans
+    if [[ "$ans" =~ ^[Nn]$ ]]; then
+      if ask_bot_token; then
+        set_token_in_index
+      else
+        echo -e "${YELLOW}Token was not changed. Keeping the existing one.${RESET}"
+      fi
+    else
+      echo -e "${GREEN}Keeping existing bot token.${RESET}"
+    fi
   else
-    echo -e "${YELLOW}No token was set. You can set it later from Bot Menu (Set / Change Bot Token).${RESET}"
+    if ask_bot_token; then
+      set_token_in_index
+    else
+      echo -e "${YELLOW}No token was set. You can set it later from Bot Menu (Set / Change Bot Token).${RESET}"
+    fi
   fi
 
   # Make scripts executable
