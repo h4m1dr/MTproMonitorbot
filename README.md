@@ -26,15 +26,18 @@ sudo git clone https://github.com/h4m1dr/MTproMonitorbot.git
 cd MTproMonitorbot
 sudo chmod +x mtpromonitor.sh
 sudo ./mtpromonitor.sh
+```
+
 This launches the Main Menu where you can install prerequisites, install/update the bot, set the token, start/stop the bot, and clean up.
 
 If the repo already exists, you can update it:
 
-bash
+```bash
 Copy code
 cd /opt/MTproMonitorbot
 sudo git pull
 sudo ./mtpromonitor.sh
+```
 📁 Installation Directory
 Installer installs everything into:
 
