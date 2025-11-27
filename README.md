@@ -33,7 +33,6 @@ This launches the Main Menu where you can install prerequisites, install/update 
 If the repo already exists, you can update it:
 
 ```bash
-Copy code
 cd /opt/MTproMonitorbot
 sudo git pull
 sudo ./mtpromonitor.sh
@@ -41,27 +40,26 @@ sudo ./mtpromonitor.sh
 📁 Installation Directory
 Installer installs everything into:
 
-bash
-Copy code
+```bash
 /opt/MTproMonitorbot
+```
 Contents:
-
+```
 pgsql
-Copy code
 /opt/MTproMonitorbot/
  ├── bot/              → Telegram bot logic (Node.js)
  ├── scripts/          → MTProxy management scripts (create/delete/list/stats)
  ├── data/             → Usage database (usage.json)
  ├── mtpromonitor.sh   → Installer & manager script
  └── node_modules/     → Installed node packages
+```
 pm2 process name used:
-
+```
 nginx
-Copy code
 mtpromonitorbot
 🧩 Prerequisites / Requirements
 Supported OS: Debian / Ubuntu
-
+```
 Basic requirements:
 
 Linux server
@@ -84,10 +82,10 @@ pm2	~50MB	Bot service manager
 
 📟 Status Header (Shown on Every Menu)
 At top of the installer:
-
+```
 vbnet
-Copy code
 Status: Prereqs=OK  Proxy=ON  BotToken=SET
+```
 Meaning:
 
 Field	Meaning
@@ -105,28 +103,26 @@ BotToken: SET / NOT SET / NOT INSTALLED
 
 🧭 Main Menu (Top-Level)
 When you run:
-
-bash
-Copy code
+```
 ./mtpromonitor.sh
+```
 You get:
-
-css
-Copy code
+```
 Main Menu
 [1] Prerequisites Menu
 [2] Bot Menu
 [3] Cleanup Menu
 [0] Exit
 1️⃣ Prerequisites Menu
-css
-Copy code
+```
+```
 Prerequisites Menu
 [1] Show detailed system status
 [2] Install / Update base packages (git, curl, nodejs, npm)
 [3] Install / Update pm2
 [0] Back to Main Menu
 [1] Show system status
+```
 Displays:
 
 Node.js + npm
@@ -177,31 +173,28 @@ Makes scripts executable
 
 [2] Set / Change Bot Token
 Updates token inside:
-
-bash
-Copy code
+```
 /opt/MTproMonitorbot/bot/index.js
+```
 [3] Start Bot
 Runs:
-
-bash
-Copy code
+```
 pm2 start bot/index.js --name mtpromonitorbot
 pm2 save
+```
 [4] Stop Bot
 Runs:
-
-bash
-Copy code
+```
 pm2 delete mtpromonitorbot
+```
 [5] Restart Bot
-bash
-Copy code
+```
 pm2 restart mtpromonitorbot
+```
 [6] Show pm2 status
-bash
-Copy code
+```
 pm2 status
+```
 [7] Manual Edit
 Allows editing:
 
@@ -214,8 +207,7 @@ data/usage.json
 Using nano or default $EDITOR.
 
 3️⃣ Cleanup Menu
-css
-Copy code
+```
 Cleanup Menu
 [1] Stop bot and remove pm2 process
 [2] Remove bot install folder
@@ -223,19 +215,17 @@ Cleanup Menu
 [0] Back to Main Menu
 [1] Remove pm2 process
 Stops and deletes pm2 service.
-
+```
 [2] Remove installation folder
 Deletes:
-
-bash
-Copy code
+```
 /opt/MTproMonitorbot
+```
 [3] Clear npm cache
 Runs:
-
-bash
-Copy code
+```
 npm cache clean --force
+```
 🔧 Manual File Overview
 bot/index.js
 Main Telegram bot logic.
@@ -259,34 +249,32 @@ Installer, updater, service manager.
 
 🔄 Updating the Bot
 On server:
-
-bash
-Copy code
+```
 cd /opt/MTproMonitorbot
 sudo git pull
 sudo ./mtpromonitor.sh
+```
 Choose:
-
-css
-Copy code
+```
 [2] Bot Menu → [1] Install / Update Bot
+```
 🛑 Uninstall Completely
-bash
-Copy code
+```
 pm2 delete mtpromonitorbot
 rm -rf /opt/MTproMonitorbot
+```
 ✔️ Done
 This README is clean, professional, and fully documents:
 
-Usage
+--Usage
 
-Installation
+--Installation
 
-Menus
+--Menus
 
-Maintenance
+--Maintenance
 
-File structure
+--File structure
 
-Requirements
+--Requirements
 
