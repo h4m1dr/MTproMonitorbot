@@ -22,6 +22,12 @@ has_cmd() {
   command -v "$1" >/dev/null 2>&1
 }
 
+# ===== Helper: check if apt package is installed =====
+is_pkg_installed() {
+  # Debian/Ubuntu: return 0 if installed, 1 otherwise
+  dpkg-query -W -f='${Status}' "$1" 2>/dev/null | grep -q "install ok installed"
+}
+
 # ===== Short status line under header =====
 short_status_header() {
   # Prerequisites summary
@@ -61,7 +67,7 @@ short_status_header() {
   echo ""
 }
 
-# ===== Detailed system status checker =====
+# ===== Detailed system status checker (not in menu, but available) =====
 check_status() {
   echo -e "${YELLOW}${BOLD}╭───────────────────────────────╮${RESET}"
   echo -e "${YELLOW}${BOLD}│ ${WHITE}System Status Check${YELLOW}            │${RESET}"
@@ -70,36 +76,36 @@ check_status() {
   # Node.js
   if has_cmd node; then
     node_ver=$(node -v 2>/dev/null)
-    echo -e " ${WHITE}• Node.js:    ${GREEN}✓ Installed${RESET} ${CYAN}($node_ver)${RESET}  ${YELLOW}~250 MB disk${RESET}"
+    echo -e " ${WHITE}• Node.js:    ${GREEN}✓ Installed${RESET} ${CYAN}($node_ver)${RESET}  ${YELLOW}~3.8 MB on this system${RESET}"
   else
-    echo -e " ${WHITE}• Node.js:    ${RED}✗ Not Found${RESET}   ${YELLOW}~250 MB disk if installed${RESET}"
+    echo -e " ${WHITE}• Node.js:    ${RED}✗ Not Found${RESET}   ${YELLOW}~3.8 MB if installed (dpkg on this VPS)${RESET}"
   fi
 
   # npm
   if has_cmd npm; then
     npm_ver=$(npm -v 2>/dev/null)
-    echo -e " ${WHITE}• npm:        ${GREEN}✓ Installed${RESET} ${CYAN}($npm_ver)${RESET}"
+    echo -e " ${WHITE}• npm:        ${GREEN}✓ Installed${RESET} ${CYAN}($npm_ver)${RESET}  ${YELLOW}~2.9 MB on this system${RESET}"
   else
-    echo -e " ${WHITE}• npm:        ${RED}✗ Not Found${RESET}"
+    echo -e " ${WHITE}• npm:        ${RED}✗ Not Found${RESET}   ${YELLOW}~2.9 MB if installed (dpkg on this VPS)${RESET}"
   fi
 
   # git
   if has_cmd git; then
-    echo -e " ${WHITE}• git:        ${GREEN}✓ Installed${RESET}  ${YELLOW}~50 MB disk${RESET}"
+    echo -e " ${WHITE}• git:        ${GREEN}✓ Installed${RESET}  ${YELLOW}~21.2 MB on this system${RESET}"
   else
-    echo -e " ${WHITE}• git:        ${RED}✗ Not Found${RESET}  ${YELLOW}~50 MB disk if installed${RESET}"
+    echo -e " ${WHITE}• git:        ${RED}✗ Not Found${RESET}  ${YELLOW}~21.2 MB if installed (dpkg on this VPS)${RESET}"
   fi
 
   # pm2
   if has_cmd pm2; then
-    echo -e " ${WHITE}• pm2:        ${GREEN}✓ Installed${RESET}  ${YELLOW}~50 MB disk${RESET}"
+    echo -e " ${WHITE}• pm2:        ${GREEN}✓ Installed${RESET}  ${YELLOW}~34 MB (global npm)${RESET}"
   else
-    echo -e " ${WHITE}• pm2:        ${RED}✗ Not Found${RESET}  ${YELLOW}~50 MB disk if installed${RESET}"
+    echo -e " ${WHITE}• pm2:        ${RED}✗ Not Found${RESET}  ${YELLOW}~34 MB if installed (global npm)${RESET}"
   fi
 
   # MTProxy process (rough)
   if pgrep -f "mtproto" >/dev/null 2>&1 || pgrep -f "mtproxy" >/dev/null 2>&1; then
-    echo -e " ${WHITE}• MTProxy:    ${GREEN}✓ Process detected${RESET}  ${YELLOW}~10–20 MB binary${RESET}"
+    echo -e " ${WHITE}• MTProxy:    ${GREEN}✓ Process detected${RESET}  ${YELLOW}~10–20 MB binary (typical)${RESET}"
   else
     echo -e " ${WHITE}• MTProxy:    ${RED}✗ Not detected${RESET}       ${YELLOW}(optional, but required for full stats)${RESET}"
   fi
@@ -112,12 +118,14 @@ check_status() {
       echo -e " ${WHITE}• Stats port: ${RED}✗ 127.0.0.1:8888 unavailable${RESET}"
     fi
   else
-    echo -e " ${WHITE}• curl:       ${RED}✗ Not Found${RESET}  ${YELLOW}~10 MB if installed${RESET}"
+    echo -e " ${WHITE}• curl:       ${RED}✗ Not Found${RESET}  ${YELLOW}~0.5 MB if installed (dpkg on this VPS)${RESET}"
   fi
 
   # Bot install dir
   if [ -d "$INSTALL_DIR" ]; then
-    echo -e " ${WHITE}• Bot folder: ${GREEN}✓ $INSTALL_DIR${RESET}  ${YELLOW}~100 MB (code + node_modules)${RESET}"
+    local size
+    size=$(du -sh "$INSTALL_DIR" 2>/dev/null | awk '{print $1}')
+    echo -e " ${WHITE}• Bot folder: ${GREEN}✓ $INSTALL_DIR${RESET}  ${YELLOW}~$size currently${RESET}"
   else
     echo -e " ${WHITE}• Bot folder: ${RED}✗ Not present${RESET} (planned: ${CYAN}$INSTALL_DIR${RESET})"
   fi
@@ -138,8 +146,26 @@ install_prereqs() {
     return
   fi
 
+  # Only install packages that are not already installed
+  local packages="git curl nodejs npm"
+  local missing=""
+  for pkg in $packages; do
+    if ! is_pkg_installed "$pkg"; then
+      missing="$missing $pkg"
+    fi
+  done
+
+  if [ -z "$missing" ]; then
+    echo -e "${GREEN}All base packages are already installed. Nothing to do.${RESET}"
+    return
+  fi
+
+  echo -e "${YELLOW}The following packages will be installed:${RESET}$missing"
+  echo -e "${YELLOW}Approximate total disk usage (if all are missing): ~28.4 MB on this VPS.${RESET}"
+  echo ""
+
   apt update
-  apt install -y git curl nodejs npm
+  apt install -y $missing
 
   echo -e "${GREEN}Base prerequisites installation finished.${RESET}"
 }
@@ -152,6 +178,16 @@ install_pm2() {
     return
   fi
 
+  if has_cmd pm2; then
+    echo -ne "${YELLOW}pm2 is already installed. Reinstall / update it now? [y/N]: ${RESET}"
+    read -r ans
+    if [[ ! "$ans" =~ ^[Yy]$ ]]; then
+      echo -e "${YELLOW}Skipped pm2 installation/update.${RESET}"
+      return
+    fi
+  fi
+
+  echo -e "${YELLOW}Approximate disk usage for pm2: ~34 MB (global npm) on this VPS.${RESET}"
   npm install -g pm2
   echo -e "${GREEN}pm2 is installed/updated.${RESET}"
 }
@@ -334,8 +370,8 @@ prereq_menu() {
     echo -e "${MAGENTA}${BOLD}╭───────────────────────────────╮${RESET}"
     echo -e "${MAGENTA}${BOLD}│ ${WHITE}Prerequisites Menu${MAGENTA}           │${RESET}"
     echo -e "${MAGENTA}${BOLD}╰───────────────────────────────╯${RESET}"
-    echo -e " ${CYAN}[1]${RESET} Install / Update base packages (git, curl, nodejs, npm)"
-    echo -e " ${CYAN}[2]${RESET} Install / Update pm2"
+    echo -e " ${CYAN}[1]${RESET} Install / Update base packages (git, curl, nodejs, npm) ${YELLOW}(~28.4 MB disk on this VPS)${RESET}"
+    echo -e " ${CYAN}[2]${RESET} Install / Update pm2 ${YELLOW}(~34 MB disk on this VPS)${RESET}"
     echo -e " ${CYAN}[0]${RESET} Back to Main Menu"
     echo ""
     echo -ne "${WHITE}Select an option: ${RESET}"
