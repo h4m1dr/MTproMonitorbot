@@ -237,7 +237,7 @@ start_bot() {
   echo -e "${CYAN}Starting bot with pm2...${RESET}"
   (cd "$INSTALL_DIR" && pm2 start bot/index.js --name "$SERVICE_NAME")
   pm2 save >/dev/null 2>&1
-  echo -e "${GREEN}Bot is now managed by pm2 as: ${WHITE}$SERVICE_NAME${RESET}"
+  echo -e "${GREEN}Bot is now managed by pm2 as: ${WHITE}$SERVICE_NAME${RESET}"`
   echo -e "${YELLOW}To see logs: ${WHITE}pm2 logs $SERVICE_NAME${RESET}"
 }
 
@@ -334,21 +334,17 @@ prereq_menu() {
     echo -e "${MAGENTA}${BOLD}╭───────────────────────────────╮${RESET}"
     echo -e "${MAGENTA}${BOLD}│ ${WHITE}Prerequisites Menu${MAGENTA}           │${RESET}"
     echo -e "${MAGENTA}${BOLD}╰───────────────────────────────╯${RESET}"
-    echo -e " ${CYAN}[1]${RESET} Show detailed system status"
-    echo -e " ${CYAN}[2]${RESET} Install / Update base packages (git, curl, nodejs, npm)"
-    echo -e " ${CYAN}[3]${RESET} Install / Update pm2"
+    echo -e " ${CYAN}[1]${RESET} Install / Update base packages (git, curl, nodejs, npm)"
+    echo -e " ${CYAN}[2]${RESET} Install / Update pm2"
     echo -e " ${CYAN}[0]${RESET} Back to Main Menu"
     echo ""
     echo -ne "${WHITE}Select an option: ${RESET}"
     read -r choice
     case "$choice" in
       1)
-        check_status()
-        ;;
-      2)
         install_prereqs
         ;;
-      3)
+      2)
         install_pm2
         ;;
       0)
