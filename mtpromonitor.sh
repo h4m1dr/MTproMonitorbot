@@ -18,7 +18,7 @@ INSTALL_DIR="/opt/MTproMonitorbot"
 SERVICE_NAME="mtpromonitorbot"
 
 # ===== Proxy detection config =====
-# You can change these if your stats URL or process name is different
+# Change these if your stats URL or process name is different
 PROXY_STATS_URL="http://127.0.0.1:8888/stats"
 PROXY_PROCESS_PATTERN="mtproto|mtproxy|mtprotoproxy|mtg|mtgproxy|mtproxy-go"
 
@@ -29,8 +29,55 @@ has_cmd() {
 
 # ===== Helper: check if apt package is installed =====
 is_pkg_installed() {
-  # Debian/Ubuntu: return 0 if installed, 1 otherwise
   dpkg-query -W -f='${Status}' "$1" 2>/dev/null | grep -q "install ok installed"
+}
+
+# ===== Helper: check if TCP port is free =====
+is_port_free() {
+  local PORT="$1"
+
+  if has_cmd ss; then
+    if ss -tuln 2>/dev/null | grep -q ":${PORT} "; then
+      return 1  # used
+    fi
+  elif has_cmd netstat; then
+    if netstat -tuln 2>/dev/null | grep -q ":${PORT} "; then
+      return 1  # used
+    fi
+  fi
+
+  return 0  # free (or cannot detect, assume free)
+}
+
+# ===== Helper: find a free port (default first, then random range) =====
+find_free_port() {
+  local DEFAULT_PORT="$1"
+  local MIN_PORT=20000
+  local MAX_PORT=40000
+  local TRY_LIMIT=50
+
+  # 1) Try default port if provided
+  if [ -n "$DEFAULT_PORT" ]; then
+    if is_port_free "$DEFAULT_PORT"; then
+      echo "$DEFAULT_PORT"
+      return 0
+    fi
+  fi
+
+  # 2) Try random ports in range
+  local i=0
+  while [ "$i" -lt "$TRY_LIMIT" ]; do
+    local PORT=$(( RANDOM % (MAX_PORT - MIN_PORT + 1) + MIN_PORT ))
+    if is_port_free "$PORT"; then
+      echo "$PORT"
+      return 0
+    fi
+    i=$((i + 1))
+  done
+
+  # 3) No free port found in attempts
+  echo ""
+  return 1
 }
 
 # ===== Short status line under header =====
@@ -86,7 +133,6 @@ install_prereqs() {
     return
   fi
 
-  # Only install packages that are not already installed
   local packages="git curl nodejs npm"
   local missing=""
   for pkg in $packages; do
@@ -153,7 +199,6 @@ set_token_in_index() {
     return 1
   fi
 
-  # Replace any TOKEN constant line with the new value
   if grep -q 'const TOKEN = ' "$target_file"; then
     sed -i "s|const TOKEN = \".*\";|const TOKEN = \"$BOT_TOKEN_VALUE\";|" "$target_file"
     echo -e "${GREEN}Bot token has been written into bot/index.js${RESET}"
@@ -161,6 +206,75 @@ set_token_in_index() {
     echo -e "${YELLOW}Could not find TOKEN constant in bot/index.js. Please update it manually.${RESET}"
     return 1
   fi
+}
+
+# ===== Set / Change default proxy port (with free-port check) =====
+set_default_port_interactive() {
+  local data_dir="$INSTALL_DIR/data"
+  local default_port_file="$data_dir/default_port"
+  local current_port="443"
+
+  if [ -f "$default_port_file" ]; then
+    current_port=$(cat "$default_port_file" 2>/dev/null || echo "443")
+  fi
+
+  while true; do
+    echo ""
+    echo -e "${CYAN}Default proxy port is used when creating new proxies (if scripts support it).${RESET}"
+    echo -e "${CYAN}Current default port: ${WHITE}$current_port${RESET}"
+    if is_port_free "$current_port"; then
+      echo -e "${GREEN}Current port appears to be FREE.${RESET}"
+    else
+      echo -e "${YELLOW}Current port appears to be IN USE.${RESET}"
+    fi
+
+    echo -ne "${CYAN}Enter default proxy port [${current_port}] or type 'auto' to auto-select a free port: ${RESET}"
+    read -r port_input
+
+    # If user just presses Enter, keep current_port (but still check it)
+    if [ -z "$port_input" ]; then
+      port_input="$current_port"
+    fi
+
+    # Auto mode: find a free port
+    if [[ "$port_input" =~ ^[Aa][Uu][Tt][Oo]$ ]]; then
+      local new_port
+      new_port=$(find_free_port "$current_port")
+      if [ -z "$new_port" ]; then
+        echo -e "${RED}Could not find any free port in the range. Try again.${RESET}"
+        continue
+      fi
+      echo -e "${GREEN}Auto-selected free port: ${WHITE}$new_port${RESET}"
+      mkdir -p "$data_dir"
+      echo "$new_port" > "$default_port_file"
+      echo -e "${GREEN}Default proxy port set to: ${WHITE}$new_port${RESET}"
+      break
+    fi
+
+    # Must be numeric
+    if ! echo "$port_input" | grep -Eq '^[0-9]+$'; then
+      echo -e "${RED}Invalid port. Please enter a number between 1 and 65535, or 'auto'.${RESET}"
+      continue
+    fi
+
+    if [ "$port_input" -lt 1 ] || [ "$port_input" -gt 65535 ]; then
+      echo -e "${RED}Port out of range. Please enter 1–65535.${RESET}"
+      continue
+    fi
+
+    # Check if this port is free
+    if ! is_port_free "$port_input"; then
+      echo -ne "${YELLOW}Port ${WHITE}$port_input${YELLOW} is already in use.${RESET} "
+      echo -e "${CYAN}You can try another port or type 'auto' to auto-select a free one.${RESET}"
+      continue
+    fi
+
+    # All good, save
+    mkdir -p "$data_dir"
+    echo "$port_input" > "$default_port_file"
+    echo -e "${GREEN}Default proxy port set to: ${WHITE}$port_input${RESET}"
+    break
+  done
 }
 
 # ===== Install & update MTPro Monitor Bot =====
@@ -220,6 +334,9 @@ install_or_update_bot() {
       echo -e "${YELLOW}No token was set. You can set it later from Bot Menu (Set / Change Bot Token).${RESET}"
     fi
   fi
+
+  # After token handling, configure default proxy port with free-port check
+  set_default_port_interactive
 
   # Make scripts executable
   if [ -d "$INSTALL_DIR/scripts" ]; then
@@ -378,11 +495,12 @@ bot_menu() {
     echo -e "${MAGENTA}${BOLD}╰───────────────────────────────╯${RESET}"
     echo -e " ${CYAN}[1]${RESET} Install / Update MTPro Monitor Bot"
     echo -e " ${CYAN}[2]${RESET} Set / Change Bot Token"
-    echo -e " ${CYAN}[3]${RESET} Start Bot (pm2)"
-    echo -e " ${CYAN}[4]${RESET} Stop Bot (pm2)"
-    echo -e " ${CYAN}[5]${RESET} Restart Bot (pm2)"
-    echo -e " ${CYAN}[6]${RESET} Show pm2 status"
-    echo -e " ${CYAN}[7]${RESET} Manual Edit (index.js, scripts, usage.json)"
+    echo -e " ${CYAN}[3]${RESET} Set / Change Default Proxy Port"
+    echo -e " ${CYAN}[4]${RESET} Start Bot (pm2)"
+    echo -e " ${CYAN}[5]${RESET} Stop Bot (pm2)"
+    echo -e " ${CYAN}[6]${RESET} Restart Bot (pm2)"
+    echo -e " ${CYAN}[7]${RESET} Show pm2 status"
+    echo -e " ${CYAN}[8]${RESET} Manual Edit (index.js, scripts, usage.json)"
     echo -e " ${CYAN}[0]${RESET} Back to Main Menu"
     echo ""
     echo -ne "${WHITE}Select an option: ${RESET}"
@@ -393,7 +511,7 @@ bot_menu() {
         read -r -p "Press Enter to return to Bot Menu... " _
         ;;
       2)
-        # New behavior: if a real token already exists, ask before replacing
+        # Token menu with warning if already set
         local target_file="$INSTALL_DIR/bot/index.js"
         if [ -f "$target_file" ] && grep -q 'const TOKEN = "' "$target_file"; then
           if ! grep -q 'const TOKEN = "TOKEN_HERE"' "$target_file"; then
@@ -413,22 +531,27 @@ bot_menu() {
         read -r -p "Press Enter to return to Bot Menu... " _
         ;;
       3)
-        start_bot
+        # New dedicated option to change default proxy port
+        set_default_port_interactive
         read -r -p "Press Enter to return to Bot Menu... " _
         ;;
       4)
-        stop_bot
+        start_bot
         read -r -p "Press Enter to return to Bot Menu... " _
         ;;
       5)
-        restart_bot
+        stop_bot
         read -r -p "Press Enter to return to Bot Menu... " _
         ;;
       6)
-        show_pm2_status
+        restart_bot
         read -r -p "Press Enter to return to Bot Menu... " _
         ;;
       7)
+        show_pm2_status
+        read -r -p "Press Enter to return to Bot Menu... " _
+        ;;
+      8)
         manual_edit_menu
         ;;
       0)
@@ -513,7 +636,7 @@ main_menu() {
     echo -e "${MAGENTA}${BOLD}│ ${WHITE}Main Menu${MAGENTA}                     │${RESET}"
     echo -e "${MAGENTA}${BOLD}╰───────────────────────────────╯${RESET}"
     echo -e " ${CYAN}[1]${RESET} Prerequisites Menu (install base packages, pm2)"
-    echo -e " ${CYAN}[2]${RESET} Bot Menu (install, token, pm2 control, manual edit)"
+    echo -e " ${CYAN}[2]${RESET} Bot Menu (install, token, port, pm2 control, manual edit)"
     echo -e " ${CYAN}[3]${RESET} Cleanup Menu (stop, remove, clean cache)"
     echo -e " ${CYAN}[0]${RESET} Exit"
     echo ""
