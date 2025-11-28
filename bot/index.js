@@ -19,12 +19,12 @@ const ROOT_DIR = path.join(__dirname, '..');
 const DATA_DIR = path.join(ROOT_DIR, 'data');
 const SCRIPTS_DIR = path.join(ROOT_DIR, 'scripts');
 const CONFIG_PATH = path.join(DATA_DIR, 'config.json');
+const DEFAULT_PORT_FILE = path.join(DATA_DIR, 'default_port');
 
-// Default config values
+// Default config values (only host / DNS here)
 const DEFAULT_CONFIG = {
-  publicHost: "",   // VPS public IP
-  dnsName: "",      // Optional domain name
-  defaultPort: 443  // Default port for new proxies
+  publicHost: "",   // VPS public IP or hostname
+  dnsName: ""       // Optional domain name (e.g. proxy.example.com)
 };
 
 // Ensure data directory exists
@@ -51,8 +51,20 @@ function saveConfig(cfg) {
 
 let config = loadConfig();
 
+// Load default port from file (fallback: 2033)
+function loadDefaultPort() {
+  try {
+    const raw = fs.readFileSync(DEFAULT_PORT_FILE, 'utf8').trim();
+    const p = parseInt(raw, 10);
+    if (p > 0 && p <= 65535) return p;
+  } catch (e) {
+    // ignore
+  }
+  return 2033;
+}
+
 // Simple per-chat state (for asking text input)
-const state = {}; // { [chatId]: { mode: 'set_ip' | 'set_dns' | 'set_port' | 'new_proxy_port' } }
+const state = {}; // { [chatId]: { mode: 'new_proxy_port' } }
 
 const bot = new TelegramBot(TOKEN, { polling: true });
 
@@ -69,27 +81,7 @@ function mainMenuKeyboard() {
         [
           { text: 'Status',           callback_data: 'menu_status' },
           { text: 'Delete proxy',     callback_data: 'menu_delete' }
-        ],
-        [
-          { text: 'Settings (IP / DNS / Port)', callback_data: 'menu_settings' }
         ]
-      ]
-    }
-  };
-}
-
-function settingsKeyboard() {
-  const hostInfo = config.publicHost ? config.publicHost : 'not set';
-  const dnsInfo  = config.dnsName    ? config.dnsName    : 'not set';
-  const portInfo = config.defaultPort;
-
-  return {
-    reply_markup: {
-      inline_keyboard: [
-        [{ text: `Set public IP/host (${hostInfo})`, callback_data: 'set_ip' }],
-        [{ text: `Set DNS / domain (${dnsInfo})`,    callback_data: 'set_dns' }],
-        [{ text: `Set default port (${portInfo})`,   callback_data: 'set_port' }],
-        [{ text: '⬅ Back to main menu',              callback_data: 'back_main' }]
       ]
     }
   };
@@ -137,14 +129,14 @@ function runScript(scriptName, args = [], callback) {
 }
 
 // Parse list_proxies.sh output into objects
-// Expected example format per line: id secret port name
+// Expected format per line: id secret port name
 function parseProxyList(output) {
   if (!output || output === 'NO_PROXIES') return [];
   const lines = output.split('\n').map(l => l.trim()).filter(Boolean);
   return lines.map((line, idx) => {
     const parts = line.split(/\s+/);
     return {
-      id: parts[0] || String(idx),   // internal id to delete
+      id: parts[0] || String(idx),
       secret: parts[1] || '',
       port: parts[2] || '',
       name: parts[3] || parts[1] || `proxy_${idx + 1}`
@@ -153,8 +145,10 @@ function parseProxyList(output) {
 }
 
 // Build proxy link using config (DNS or IP)
+// This is where you can use a domain instead of public IP.
+// Just set config.dnsName to something like "proxy.example.com" in config.json.
 function buildProxyLink(secret, port) {
-  const host = config.dnsName || config.publicHost || 'YOUR_IP_HERE';
+  const host = config.dnsName || config.publicHost || 'YOUR_DOMAIN_OR_IP';
   return `tg://proxy?server=${host}&port=${port}&secret=${secret}`;
 }
 
@@ -166,7 +160,7 @@ bot.onText(/\/start/, (msg) => {
   bot.sendMessage(chatId, 'Select an option:', mainMenuKeyboard());
 });
 
-// Optional: still support /new, /list, /status, /delete by forwarding to handlers
+// Optional text commands
 bot.onText(/\/new/, (msg) => {
   handleNewProxyRequest(msg.chat.id);
 });
@@ -180,43 +174,13 @@ bot.onText(/\/delete/, (msg) => {
   handleDeleteMenu(msg.chat.id, 0);
 });
 
-// Text input handler (for IP/DNS/Port etc.)
+// Text input handler (only used for custom port)
 bot.on('message', (msg) => {
   const chatId = msg.chat.id;
   const st = state[chatId];
 
-  // Ignore commands (starting with '/')
   if (!st || (msg.text && msg.text.startsWith('/'))) return;
   const text = (msg.text || '').trim();
-
-  if (st.mode === 'set_ip') {
-    config.publicHost = text;
-    config = saveConfig(config);
-    state[chatId] = null;
-    bot.sendMessage(chatId, `Public host set to: ${text}`, settingsKeyboard());
-    return;
-  }
-
-  if (st.mode === 'set_dns') {
-    config.dnsName = text;
-    config = saveConfig(config);
-    state[chatId] = null;
-    bot.sendMessage(chatId, `DNS / domain set to: ${text}`, settingsKeyboard());
-    return;
-  }
-
-  if (st.mode === 'set_port') {
-    const port = parseInt(text, 10);
-    if (!port || port <= 0 || port > 65535) {
-      bot.sendMessage(chatId, 'Invalid port. Please send a number between 1 and 65535.');
-      return;
-    }
-    config.defaultPort = port;
-    config = saveConfig(config);
-    state[chatId] = null;
-    bot.sendMessage(chatId, `Default port set to: ${port}`, settingsKeyboard());
-    return;
-  }
 
   if (st.mode === 'new_proxy_port') {
     const port = parseInt(text, 10);
@@ -225,7 +189,7 @@ bot.on('message', (msg) => {
       return;
     }
     state[chatId] = null;
-    createNewProxy(chatId, port);
+    createNewProxy(chatId, port, 'manual');
     return;
   }
 });
@@ -256,49 +220,12 @@ bot.on('callback_query', (query) => {
     handleDeleteMenu(chatId, 0, query);
     return;
   }
-  if (data === 'menu_settings') {
-    bot.answerCallbackQuery(query.id);
-    bot.editMessageText('Settings (IP / DNS / Port):', {
-      chat_id: chatId,
-      message_id: query.message.message_id,
-      ...settingsKeyboard()
-    });
-    return;
-  }
-  if (data === 'back_main') {
-    bot.answerCallbackQuery(query.id);
-    bot.editMessageText('Select an option:', {
-      chat_id: chatId,
-      message_id: query.message.message_id,
-      ...mainMenuKeyboard()
-    });
-    return;
-  }
-
-  // Settings actions
-  if (data === 'set_ip') {
-    state[chatId] = { mode: 'set_ip' };
-    bot.answerCallbackQuery(query.id);
-    bot.sendMessage(chatId, 'Send the public IP / host to use in proxy links (e.g. 109.120.134.99).');
-    return;
-  }
-  if (data === 'set_dns') {
-    state[chatId] = { mode: 'set_dns' };
-    bot.answerCallbackQuery(query.id);
-    bot.sendMessage(chatId, 'Send the DNS / domain name to use in proxy links (e.g. proxy.example.com).');
-    return;
-  }
-  if (data === 'set_port') {
-    state[chatId] = { mode: 'set_port' };
-    bot.answerCallbackQuery(query.id);
-    bot.sendMessage(chatId, 'Send the default port number for new proxies (e.g. 443).');
-    return;
-  }
 
   // New proxy port options
   if (data === 'new_use_default') {
     bot.answerCallbackQuery(query.id);
-    createNewProxy(chatId, config.defaultPort, 'default');
+    const defPort = loadDefaultPort();
+    createNewProxy(chatId, defPort, 'default');
     return;
   }
   if (data === 'new_custom_port') {
@@ -335,7 +262,7 @@ bot.on('callback_query', (query) => {
 // ===== Handlers =====
 
 function handleNewProxyRequest(chatId, query) {
-  const portInfo = config.defaultPort;
+  const portInfo = loadDefaultPort();
   const text =
     `New proxy:\n` +
     `Current default port: ${portInfo}\n\n` +
@@ -365,13 +292,7 @@ function handleNewProxyRequest(chatId, query) {
 function createNewProxy(chatId, port, mode = 'default') {
   const args = [];
 
-  if (config.publicHost) {
-    args.push('--host', config.publicHost);
-  }
-  if (config.dnsName) {
-    args.push('--dns', config.dnsName);
-  }
-
+  // this script will enforce free-port logic itself
   if (mode === 'default' && port) {
     args.push('--port', String(port));
   } else if (mode === 'auto') {
@@ -386,15 +307,16 @@ function createNewProxy(chatId, port, mode = 'default') {
       return;
     }
 
-    // Expect script to print something like: "SECRET PORT"
     const lines = out.split('\n').filter(Boolean);
     const first = lines[0] || '';
     const parts = first.split(/\s+/);
     const secret = parts[0] || '';
-    const realPort = parts[1] || port || config.defaultPort;
+    const realPort = parts[1] || port || loadDefaultPort();
+    const name = parts[2] || '';
     const link = buildProxyLink(secret, realPort);
 
     let msg = 'New proxy created.\n';
+    msg += `Name: \`${name}\`\n`;
     msg += `Secret: \`${secret}\`\n`;
     msg += `Port: \`${realPort}\`\n`;
     msg += `Link:\n${link}`;

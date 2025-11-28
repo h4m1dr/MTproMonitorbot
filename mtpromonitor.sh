@@ -16,6 +16,7 @@ RESET='\e[0m'
 # ===== Global paths =====
 INSTALL_DIR="/opt/MTproMonitorbot"
 SERVICE_NAME="mtpromonitorbot"
+CONFIG_PATH="$INSTALL_DIR/data/config.json"
 
 # ===== Proxy detection config =====
 # Change these if your stats URL or process name is different
@@ -78,6 +79,33 @@ find_free_port() {
   # 3) No free port found in attempts
   echo ""
   return 1
+}
+
+# ===== Config helpers (config.json for host/DNS) =====
+
+get_config_value() {
+  local KEY="$1"
+  if [ ! -f "$CONFIG_PATH" ]; then
+    echo ""
+    return 0
+  fi
+  # naive JSON field extraction: "key": "value"
+  sed -n "s/.*\"$KEY\" *: *\"\([^\"]*\)\".*/\1/p" "$CONFIG_PATH" | head -n1
+}
+
+write_config_values() {
+  local HOST="$1"
+  local DNS="$2"
+  local dir
+  dir="$(dirname "$CONFIG_PATH")"
+  mkdir -p "$dir"
+
+  cat >"$CONFIG_PATH" <<EOF
+{
+  "publicHost": "$HOST",
+  "dnsName": "$DNS"
+}
+EOF
 }
 
 # ===== Short status line under header =====
@@ -212,10 +240,10 @@ set_token_in_index() {
 set_default_port_interactive() {
   local data_dir="$INSTALL_DIR/data"
   local default_port_file="$data_dir/default_port"
-  local current_port="443"
+  local current_port="2033"
 
   if [ -f "$default_port_file" ]; then
-    current_port=$(cat "$default_port_file" 2>/dev/null || echo "443")
+    current_port=$(cat "$default_port_file" 2>/dev/null || echo "2033")
   fi
 
   while true; do
@@ -231,12 +259,10 @@ set_default_port_interactive() {
     echo -ne "${CYAN}Enter default proxy port [${current_port}] or type 'auto' to auto-select a free port: ${RESET}"
     read -r port_input
 
-    # If user just presses Enter, keep current_port (but still check it)
     if [ -z "$port_input" ]; then
       port_input="$current_port"
     fi
 
-    # Auto mode: find a free port
     if [[ "$port_input" =~ ^[Aa][Uu][Tt][Oo]$ ]]; then
       local new_port
       new_port=$(find_free_port "$current_port")
@@ -251,7 +277,6 @@ set_default_port_interactive() {
       break
     fi
 
-    # Must be numeric
     if ! echo "$port_input" | grep -Eq '^[0-9]+$'; then
       echo -e "${RED}Invalid port. Please enter a number between 1 and 65535, or 'auto'.${RESET}"
       continue
@@ -262,19 +287,57 @@ set_default_port_interactive() {
       continue
     fi
 
-    # Check if this port is free
     if ! is_port_free "$port_input"; then
       echo -ne "${YELLOW}Port ${WHITE}$port_input${YELLOW} is already in use.${RESET} "
       echo -e "${CYAN}You can try another port or type 'auto' to auto-select a free one.${RESET}"
       continue
     fi
 
-    # All good, save
     mkdir -p "$data_dir"
     echo "$port_input" > "$default_port_file"
     echo -e "${GREEN}Default proxy port set to: ${WHITE}$port_input${RESET}"
     break
   done
+}
+
+# ===== Configure Host / DNS (for proxy links) =====
+configure_host_dns_interactive() {
+  echo ""
+  echo -e "${MAGENTA}${BOLD}Configure Host / DNS for proxy links${RESET}"
+
+  local current_host
+  local current_dns
+
+  current_host="$(get_config_value "publicHost")"
+  current_dns="$(get_config_value "dnsName")"
+
+  local display_host="$current_host"
+  local display_dns="$current_dns"
+  [ -z "$display_host" ] && display_host="(not set)"
+  [ -z "$display_dns" ] && display_dns="(not set)"
+
+  echo -e "${CYAN}Current public host/IP:${RESET} ${WHITE}$display_host${RESET}"
+  echo -e "${CYAN}Current DNS / domain:${RESET}   ${WHITE}$display_dns${RESET}"
+  echo ""
+
+  echo -ne "${CYAN}Enter public IP / host [${display_host}]: ${RESET}"
+  read -r new_host
+  if [ -z "$new_host" ]; then
+    new_host="$current_host"
+  fi
+
+  echo -ne "${CYAN}Enter DNS / domain (e.g. proxy.example.com) [${display_dns}]: ${RESET}"
+  read -r new_dns
+  if [ -z "$new_dns" ]; then
+    new_dns="$current_dns"
+  fi
+
+  write_config_values "$new_host" "$new_dns"
+
+  echo ""
+  echo -e "${GREEN}Saved config:${RESET}"
+  echo -e "  publicHost = ${WHITE}${new_host:-'(empty)'}${RESET}"
+  echo -e "  dnsName    = ${WHITE}${new_dns:-'(empty)'}${RESET}"
 }
 
 # ===== Install & update MTPro Monitor Bot =====
@@ -283,13 +346,11 @@ install_or_update_bot() {
   echo -e "${MAGENTA}${BOLD}│ ${WHITE}Install / Update Bot${MAGENTA}           │${RESET}"
   echo -e "${MAGENTA}${BOLD}╰───────────────────────────────╯${RESET}"
 
-  # Create install dir if missing
   if [ ! -d "$INSTALL_DIR" ]; then
     echo -e "${CYAN}Creating install directory: ${WHITE}$INSTALL_DIR${RESET}"
     sudo mkdir -p "$INSTALL_DIR" 2>/dev/null || mkdir -p "$INSTALL_DIR"
   fi
 
-  # Clone or update repo
   if [ -d "$INSTALL_DIR/.git" ]; then
     echo -e "${CYAN}Repository found. Pulling latest changes...${RESET}"
     (cd "$INSTALL_DIR" && git pull)
@@ -298,7 +359,6 @@ install_or_update_bot() {
     git clone https://github.com/h4m1dr/MTproMonitorbot.git "$INSTALL_DIR"
   fi
 
-  # Detect existing token before touching it
   local target_file="$INSTALL_DIR/bot/index.js"
   local had_token_before="NO"
   if [ -f "$target_file" ]; then
@@ -309,11 +369,9 @@ install_or_update_bot() {
     fi
   fi
 
-  # npm install
   echo -e "${CYAN}Running npm install...${RESET}"
   (cd "$INSTALL_DIR" && npm install)
 
-  # Decide what to do with token
   if [ "$had_token_before" = "YES" ]; then
     echo -e "${YELLOW}Existing bot token detected in bot/index.js.${RESET}"
     echo -ne "${CYAN}Keep current token? [Y/n]: ${RESET}"
@@ -335,10 +393,8 @@ install_or_update_bot() {
     fi
   fi
 
-  # After token handling, configure default proxy port with free-port check
   set_default_port_interactive
 
-  # Make scripts executable
   if [ -d "$INSTALL_DIR/scripts" ]; then
     chmod +x "$INSTALL_DIR"/scripts/*.sh 2>/dev/null
   fi
@@ -496,25 +552,26 @@ bot_menu() {
     echo -e " ${CYAN}[1]${RESET} Install / Update MTPro Monitor Bot"
     echo -e " ${CYAN}[2]${RESET} Set / Change Bot Token"
     echo -e " ${CYAN}[3]${RESET} Set / Change Default Proxy Port"
-    echo -e " ${CYAN}[4]${RESET} Start Bot (pm2)"
-    echo -e " ${CYAN}[5]${RESET} Stop Bot (pm2)"
-    echo -e " ${CYAN}[6]${RESET} Restart Bot (pm2)"
-    echo -e " ${CYAN}[7]${RESET} Show pm2 status"
-    echo -e " ${CYAN}[8]${RESET} Manual Edit (index.js, scripts, usage.json)"
+    echo -e " ${CYAN}[4]${RESET} Configure Host / DNS for proxy links"
+    echo -e " ${CYAN}[5]${RESET} Start Bot (pm2)"
+    echo -e " ${CYAN}[6]${RESET} Stop Bot (pm2)"
+    echo -e " ${CYAN}[7]${RESET} Restart Bot (pm2)"
+    echo -e " ${CYAN}[8]${RESET} Show pm2 status"
+    echo -e " ${CYAN}[9]${RESET} Manual Edit (index.js, scripts, usage.json)"
     echo -e " ${CYAN}[0]${RESET} Back to Main Menu"
     echo ""
     echo -ne "${WHITE}Select an option: ${RESET}"
     read -r choice
-    case "$choice" in
+    case "$choice$" in
       1)
         install_or_update_bot
         read -r -p "Press Enter to return to Bot Menu... " _
         ;;
       2)
         # Token menu with warning if already set
-        local target_file="$INSTALL_DIR/bot/index.js"
-        if [ -f "$target_file" ] && grep -q 'const TOKEN = "' "$target_file"; then
-          if ! grep -q 'const TOKEN = "TOKEN_HERE"' "$target_file"; then
+        local_target_file="$INSTALL_DIR/bot/index.js"
+        if [ -f "$local_target_file" ] && grep -q 'const TOKEN = "' "$local_target_file"; then
+          if ! grep -q 'const TOKEN = "TOKEN_HERE"' "$local_target_file"; then
             echo -e "${YELLOW}Existing bot token detected in bot/index.js.${RESET}"
             echo -ne "${CYAN}Do you want to replace it? [y/N]: ${RESET}"
             read -r ans
@@ -531,27 +588,30 @@ bot_menu() {
         read -r -p "Press Enter to return to Bot Menu... " _
         ;;
       3)
-        # New dedicated option to change default proxy port
         set_default_port_interactive
         read -r -p "Press Enter to return to Bot Menu... " _
         ;;
       4)
-        start_bot
+        configure_host_dns_interactive
         read -r -p "Press Enter to return to Bot Menu... " _
         ;;
       5)
-        stop_bot
+        start_bot
         read -r -p "Press Enter to return to Bot Menu... " _
         ;;
       6)
-        restart_bot
+        stop_bot
         read -r -p "Press Enter to return to Bot Menu... " _
         ;;
       7)
-        show_pm2_status
+        restart_bot
         read -r -p "Press Enter to return to Bot Menu... " _
         ;;
       8)
+        show_pm2_status
+        read -r -p "Press Enter to return to Bot Menu... " _
+        ;;
+      9)
         manual_edit_menu
         ;;
       0)
@@ -636,7 +696,7 @@ main_menu() {
     echo -e "${MAGENTA}${BOLD}│ ${WHITE}Main Menu${MAGENTA}                     │${RESET}"
     echo -e "${MAGENTA}${BOLD}╰───────────────────────────────╯${RESET}"
     echo -e " ${CYAN}[1]${RESET} Prerequisites Menu (install base packages, pm2)"
-    echo -e " ${CYAN}[2]${RESET} Bot Menu (install, token, port, pm2 control, manual edit)"
+    echo -e " ${CYAN}[2]${RESET} Bot Menu (install, token, port, host/DNS, pm2 control, manual edit)"
     echo -e " ${CYAN}[3]${RESET} Cleanup Menu (stop, remove, clean cache)"
     echo -e " ${CYAN}[0]${RESET} Exit"
     echo ""

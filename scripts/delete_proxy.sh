@@ -1,15 +1,28 @@
 #!/bin/bash
-# remove MTProxy secret
+# delete_proxy.sh
+# Delete a proxy by its ID from data/proxies.txt
+# Usage: delete_proxy.sh <id>
 
-SECRET="$1"
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+ROOT_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
+DATA_DIR="$ROOT_DIR/data"
+PROXY_DB_FILE="$DATA_DIR/proxies.txt"
 
-if [ -z "$SECRET" ]; then
-    echo "Usage: delete_proxy.sh <secret>"
-    exit 1
+ID="$1"
+
+if [ -z "$ID" ]; then
+  echo "ERROR: Proxy ID is required." >&2
+  exit 1
 fi
 
-sed -i "/$SECRET/d" /etc/mtproxy/secret.list
+if [ ! -f "$PROXY_DB_FILE" ]; then
+  echo "ERROR: Proxy database not found." >&2
+  exit 1
+fi
 
-systemctl restart mtproxy
+TMP_FILE="${PROXY_DB_FILE}.tmp"
 
-echo "Secret $SECRET removed."
+grep -v "^$ID " "$PROXY_DB_FILE" > "$TMP_FILE" 2>/dev/null
+mv "$TMP_FILE" "$PROXY_DB_FILE"
+
+echo "Proxy with ID $ID removed (if it existed)."
