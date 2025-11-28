@@ -115,6 +115,20 @@ function buildDeleteKeyboard(proxies, page = 0, perPage = 8) {
   return { inline_keyboard: rows };
 }
 
+// Build inline keyboard for viewing proxies (buttons with URL)
+function buildViewKeyboard(proxies, perRow = 2) {
+  const rows = [];
+  for (let i = 0; i < proxies.length; i += perRow) {
+    const slice = proxies.slice(i, i + perRow);
+    const row = slice.map(p => ({
+      text: `${p.name} (${p.port})`,
+      url: buildProxyLink(p.secret, p.port)
+    }));
+    rows.push(row);
+  }
+  return { inline_keyboard: rows };
+}
+
 // ===== Helpers to call shell scripts =====
 
 function runScript(scriptName, args = [], callback) {
@@ -145,8 +159,7 @@ function parseProxyList(output) {
 }
 
 // Build proxy link using config (DNS or IP)
-// This is where you can use a domain instead of public IP.
-// Just set config.dnsName to something like "proxy.example.com" in config.json.
+// If dnsName is set, it will be used instead of publicHost.
 function buildProxyLink(secret, port) {
   const host = config.dnsName || config.publicHost || 'YOUR_DOMAIN_OR_IP';
   return `tg://proxy?server=${host}&port=${port}&secret=${secret}`;
@@ -325,7 +338,7 @@ function createNewProxy(chatId, port, mode = 'default') {
   });
 }
 
-// List proxies
+// List proxies (now with inline buttons)
 function handleListRequest(chatId, query) {
   runScript('list_proxies.sh', [], (err, out) => {
     if (err) {
@@ -337,12 +350,11 @@ function handleListRequest(chatId, query) {
       bot.sendMessage(chatId, 'There are no proxies yet. Use "New proxy" to create one.');
       return;
     }
-    let text = `Total proxies: ${proxies.length}\n\n`;
-    proxies.forEach((p, idx) => {
-      const link = buildProxyLink(p.secret, p.port);
-      text += `${idx + 1}. ${p.name} (port: ${p.port})\n${link}\n\n`;
-    });
-    bot.sendMessage(chatId, text);
+
+    const kb = buildViewKeyboard(proxies, 2);
+    const text = `Total proxies: ${proxies.length}\nTap a button to open the proxy link:`;
+
+    bot.sendMessage(chatId, text, { reply_markup: kb });
   });
 }
 

@@ -81,6 +81,35 @@ find_free_port() {
   return 1
 }
 
+# ===== Detect public IP (for default host) =====
+detect_public_ip() {
+  local ip=""
+
+  if has_cmd curl; then
+    ip=$(curl -s https://ifconfig.me 2>/dev/null)
+    if echo "$ip" | grep -Eq '^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$'; then
+      echo "$ip"
+      return 0
+    fi
+    ip=$(curl -s https://api.ipify.org 2>/dev/null)
+    if echo "$ip" | grep -Eq '^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$'; then
+      echo "$ip"
+      return 0
+    fi
+  fi
+
+  if has_cmd dig; then
+    ip=$(dig +short myip.opendns.com @resolver1.opendns.com 2>/dev/null | tail -n1)
+    if echo "$ip" | grep -Eq '^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$'; then
+      echo "$ip"
+      return 0
+    fi
+  fi
+
+  echo ""
+  return 1
+}
+
 # ===== Config helpers (config.json for host/DNS) =====
 
 get_config_value() {
@@ -311,33 +340,40 @@ configure_host_dns_interactive() {
   current_host="$(get_config_value "publicHost")"
   current_dns="$(get_config_value "dnsName")"
 
-  local display_host="$current_host"
-  local display_dns="$current_dns"
-  [ -z "$display_host" ] && display_host="(not set)"
-  [ -z "$display_dns" ] && display_dns="(not set)"
-
-  echo -e "${CYAN}Current public host/IP:${RESET} ${WHITE}$display_host${RESET}"
-  echo -e "${CYAN}Current DNS / domain:${RESET}   ${WHITE}$display_dns${RESET}"
-  echo ""
-
-  echo -ne "${CYAN}Enter public IP / host [${display_host}]: ${RESET}"
-  read -r new_host
-  if [ -z "$new_host" ]; then
-    new_host="$current_host"
+  # If no host is set in config, try to detect public IP automatically
+  local detected_ip=""
+  if [ -z "$current_host" ]; then
+    detected_ip="$(detect_public_ip)"
+    if [ -n "$detected_ip" ]; then
+      current_host="$detected_ip"
+    fi
   fi
 
+  local display_host="$current_host"
+  local display_dns="$current_dns"
+  [ -z "$display_host" ] && display_host="(unknown)"
+  [ -z "$display_dns" ] && display_dns="(not set)"
+
+  echo -e "${CYAN}Detected / current public host/IP:${RESET} ${WHITE}$display_host${RESET}"
+  echo -e "${CYAN}Current DNS / domain:${RESET}           ${WHITE}$display_dns${RESET}"
+  echo ""
+
+  # We do NOT ask for host/IP anymore, only DNS
   echo -ne "${CYAN}Enter DNS / domain (e.g. proxy.example.com) [${display_dns}]: ${RESET}"
   read -r new_dns
   if [ -z "$new_dns" ]; then
     new_dns="$current_dns"
   fi
 
-  write_config_values "$new_host" "$new_dns"
+  local final_host="$current_host"
+  local final_dns="$new_dns"
+
+  write_config_values "$final_host" "$final_dns"
 
   echo ""
   echo -e "${GREEN}Saved config:${RESET}"
-  echo -e "  publicHost = ${WHITE}${new_host:-'(empty)'}${RESET}"
-  echo -e "  dnsName    = ${WHITE}${new_dns:-'(empty)'}${RESET}"
+  echo -e "  publicHost = ${WHITE}${final_host:-'(empty)'}${RESET}"
+  echo -e "  dnsName    = ${WHITE}${final_dns:-'(empty)'}${RESET}"
 }
 
 # ===== Install & update MTPro Monitor Bot =====
