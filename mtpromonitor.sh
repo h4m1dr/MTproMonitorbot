@@ -17,6 +17,10 @@ RESET='\e[0m'
 INSTALL_DIR="/opt/MTproMonitorbot"
 SERVICE_NAME="mtpromonitorbot"
 
+# ===== Proxy detection config (you can change these if needed) =====
+PROXY_STATS_URL="http://127.0.0.1:8888/stats"
+PROXY_PROCESS_PATTERN="mtproto|mtproxy|mtprotoproxy|mtg|mtgproxy|mtproxy-go"
+
 # ===== Helper: check if command exists =====
 has_cmd() {
   command -v "$1" >/dev/null 2>&1
@@ -42,9 +46,9 @@ short_status_header() {
 
   # Proxy status (stats endpoint or process names)
   local proxy_status="UNKNOWN"
-  if has_cmd curl && curl -s --max-time 1 http://127.0.0.1:8888/stats >/dev/null 2>&1; then
+  if has_cmd curl && curl -s --max-time 1 "$PROXY_STATS_URL" >/dev/null 2>&1; then
     proxy_status="ON"
-  elif pgrep -fi "mtproto|mtproxy|mtprotoproxy|mtg|mtgproxy" >/dev/null 2>&1; then
+  elif pgrep -fi "$PROXY_PROCESS_PATTERN" >/dev/null 2>&1; then
     proxy_status="RUNNING(no stats)"
   else
     proxy_status="OFF"
@@ -87,7 +91,7 @@ check_status() {
     echo -e " ${WHITE}• npm:        ${GREEN}✓ Installed${RESET} ${CYAN}($npm_ver)${RESET}  ${YELLOW}~2.9 MB on this system${RESET}"
   else
     echo -e " ${WHITE}• npm:        ${RED}✗ Not Found${RESET}   ${YELLOW}~2.9 MB if installed (dpkg on this VPS)${RESET}"
-  fi
+  fi`
 
   # git
   if has_cmd git; then
@@ -104,18 +108,18 @@ check_status() {
   fi
 
   # MTProxy process (rough)
-  if pgrep -fi "mtproto|mtproxy|mtprotoproxy|mtg|mtgproxy" >/dev/null 2>&1; then
+  if pgrep -fi "$PROXY_PROCESS_PATTERN" >/dev/null 2>&1; then
     echo -e " ${WHITE}• MTProxy:    ${GREEN}✓ Process detected${RESET}  ${YELLOW}(port and binary depend on your setup)${RESET}"
   else
     echo -e " ${WHITE}• MTProxy:    ${RED}✗ Not detected${RESET}       ${YELLOW}(optional, but required for full stats)${RESET}"
   fi
 
-  # Stats port check (default 8888)
+  # Stats endpoint check
   if has_cmd curl; then
-    if curl -s --max-time 1 http://127.0.0.1:8888/stats >/dev/null 2>&1; then
-      echo -e " ${WHITE}• Stats port: ${GREEN}✓ 127.0.0.1:8888 reachable${RESET}"
+    if curl -s --max-time 1 "$PROXY_STATS_URL" >/dev/null 2>&1; then
+      echo -e " ${WHITE}• Stats endpoint: ${GREEN}✓ $PROXY_STATS_URL reachable${RESET}"
     else
-      echo -e " ${WHITE}• Stats port: ${RED}✗ 127.0.0.1:8888 unavailable${RESET}"
+      echo -e " ${WHITE}• Stats endpoint: ${RED}✗ $PROXY_STATS_URL unavailable${RESET}"
     fi
   else
     echo -e " ${WHITE}• curl:       ${RED}✗ Not Found${RESET}  ${YELLOW}~0.5 MB if installed (dpkg on this VPS)${RESET}"
@@ -176,7 +180,7 @@ install_pm2() {
   if ! has_cmd npm; then
     echo -e "${RED}npm not found. Install Node.js + npm first.${RESET}"
     return
-  fi
+  fi`
 
   if has_cmd pm2; then
     echo -ne "${YELLOW}pm2 is already installed. Reinstall / update it now? [y/N]: ${RESET}"
@@ -449,6 +453,20 @@ bot_menu() {
         install_or_update_bot
         ;;
       2)
+        # New behavior: if a real token already exists, ask before replacing
+        target_file="$INSTALL_DIR/bot/index.js"
+        if [ -f "$target_file" ] && grep -q 'const TOKEN = "' "$target_file"; then
+          if ! grep -q 'const TOKEN = "TOKEN_HERE"' "$target_file"; then
+            echo -e "${YELLOW}Existing bot token detected in bot/index.js.${RESET}"
+            echo -ne "${CYAN}Do you want to replace it? [y/N]: ${RESET}"
+            read -r ans
+            if [[ ! "$ans" =~ ^[Yy]$ ]]; then
+              echo -e "${GREEN}Keeping current token.${RESET}"
+              read -r -p "Press Enter to return to Bot Menu... " _
+              continue
+            fi
+          fi
+        fi
         if ask_bot_token; then
           set_token_in_index
         fi
