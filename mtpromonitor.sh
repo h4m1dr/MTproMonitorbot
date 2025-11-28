@@ -562,7 +562,7 @@ bot_menu() {
     echo ""
     echo -ne "${WHITE}Select an option: ${RESET}"
     read -r choice
-    case "$choice$" in
+    case "$choice" in
       1)
         install_or_update_bot
         read -r -p "Press Enter to return to Bot Menu... " _
