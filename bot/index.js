@@ -1,10 +1,10 @@
 // bot/index.js
 // MTPro Monitor Bot - Telegram interface
 
-const fs = require('fs');
-const path = require('path');
-const { execFile } = require('child_process');
-const TelegramBot = require('node-telegram-bot-api');
+const fs = require("fs");
+const path = require("path");
+const { execFile } = require("child_process");
+const TelegramBot = require("node-telegram-bot-api");
 
 // This line is replaced by installer script (mtpromonitor.sh)
 const TOKEN = "TOKEN_HERE";
@@ -15,30 +15,30 @@ if (!TOKEN || TOKEN === "TOKEN_HERE") {
 }
 
 // Paths
-const ROOT_DIR = path.join(__dirname, '..');
-const DATA_DIR = path.join(ROOT_DIR, 'data');
-const SCRIPTS_DIR = path.join(ROOT_DIR, 'scripts');
-const CONFIG_PATH = path.join(DATA_DIR, 'config.json');
-const DEFAULT_PORT_FILE = path.join(DATA_DIR, 'default_port');
+const ROOT_DIR = path.join(__dirname, "..");
+const DATA_DIR = path.join(ROOT_DIR, "data");
+const SCRIPTS_DIR = path.join(ROOT_DIR, "scripts");
+const CONFIG_PATH = path.join(DATA_DIR, "config.json");
 
-// Default config values (only host / DNS here)
+// Default config values
 const DEFAULT_CONFIG = {
-  publicHost: "",   // VPS public IP or hostname
-  dnsName: ""       // Optional domain name (e.g. proxy.example.com)
+  publicHost: "",
+  dnsName: "",
+  defaultPort: 2033 // default port if scripts do not return one
 };
 
-// Ensure data directory exists
+// Ensure data dir exists
 if (!fs.existsSync(DATA_DIR)) {
   fs.mkdirSync(DATA_DIR, { recursive: true });
 }
 
-// Load/save config helpers
+// ---- Config helpers ----
 function loadConfig() {
   try {
-    const raw = fs.readFileSync(CONFIG_PATH, 'utf8');
+    const raw = fs.readFileSync(CONFIG_PATH, "utf8");
     const cfg = JSON.parse(raw);
     return { ...DEFAULT_CONFIG, ...cfg };
-  } catch (e) {
+  } catch {
     return { ...DEFAULT_CONFIG };
   }
 }
@@ -51,360 +51,436 @@ function saveConfig(cfg) {
 
 let config = loadConfig();
 
-// Load default port from file (fallback: 2033)
-function loadDefaultPort() {
-  try {
-    const raw = fs.readFileSync(DEFAULT_PORT_FILE, 'utf8').trim();
-    const p = parseInt(raw, 10);
-    if (p > 0 && p <= 65535) return p;
-  } catch (e) {
-    // ignore
-  }
-  return 2033;
+// ---- Shell helpers ----
+function runScript(scriptName, args = [], callback) {
+  const scriptPath = path.join(SCRIPTS_DIR, scriptName);
+  execFile("bash", [scriptPath, ...args], (err, stdout, stderr) => {
+    if (err) {
+      console.error(`Script ${scriptName} failed:`, stderr || err.message);
+      return callback(err, null);
+    }
+    callback(null, (stdout || "").trim());
+  });
 }
 
-// Simple per-chat state (for asking text input)
-const state = {}; // { [chatId]: { mode: 'new_proxy_port' } }
+// Promise wrapper (for async/await)
+function runScriptAsync(scriptName, args = []) {
+  return new Promise((resolve, reject) => {
+    runScript(scriptName, args, (err, out) => {
+      if (err) return reject(err);
+      resolve(out);
+    });
+  });
+}
+
+// Check if a TCP port is listening (ON/OFF) using "ss"
+function checkPortStatus(port) {
+  return new Promise((resolve) => {
+    if (!port) return resolve("UNKNOWN");
+    const cmd = `ss -tuln 2>/dev/null | grep -q ":${port} " && echo ON || echo OFF`;
+    execFile("bash", ["-c", cmd], (err, stdout) => {
+      if (err) return resolve("UNKNOWN");
+      const out = (stdout || "").trim();
+      if (out === "ON") return resolve("ONLINE");
+      if (out === "OFF") return resolve("OFFLINE");
+      return resolve("UNKNOWN");
+    });
+  });
+}
+
+// ---- Proxy helpers ----
+
+// Parse a line of proxy info.
+//
+// We try to be robust with the format. Example supported formats:
+//   "proxy_2025_01 9b1f2c... 2033"
+//   "id1 proxy_2025_01 9b1f2c... 2033"
+// Anything that looks like 32 hex chars is secret,
+// anything that looks like a number 1-65535 is port,
+// and the first token that is not secret/port is name.
+function parseProxyLine(line, fallbackIndex) {
+  const parts = line.split(/\s+/).filter(Boolean);
+  let name = "";
+  let secret = "";
+  let port = "";
+  let id = String(fallbackIndex);
+
+  const hex32 = /^[0-9a-fA-F]{32}$/;
+  const portRe = /^[0-9]{1,5}$/;
+
+  for (const p of parts) {
+    if (!secret && hex32.test(p)) {
+      secret = p;
+      continue;
+    }
+    if (!port && portRe.test(p)) {
+      port = p;
+      continue;
+    }
+  }
+
+  // Collect name/id from remaining tokens
+  const others = parts.filter((p) => p !== secret && p !== port);
+  if (others.length > 0) {
+    name = others[0];
+    if (others.length > 1) {
+      id = others[0]; // treat first token as id if present
+    }
+  } else {
+    name = `proxy_${fallbackIndex + 1}`;
+  }
+
+  return { id, name, secret, port };
+}
+
+// Parse list_proxies script output into objects
+function parseProxyList(output) {
+  if (!output) return [];
+  const lines = output
+    .split("\n")
+    .map((l) => l.trim())
+    .filter((l) => l && !/^NO_PROXIES/i.test(l));
+
+  return lines.map((line, idx) => parseProxyLine(line, idx));
+}
+
+// Build tg://proxy link using config (DNS > IP)
+function buildProxyLink(secret, port) {
+  const host = config.dnsName || config.publicHost || "YOUR_IP_HERE";
+  if (!secret || !port) {
+    return "tg://proxy?server=" + host;
+  }
+  return `tg://proxy?server=${host}&port=${port}&secret=${secret}`;
+}
+
+// ---- Telegram bot ----
 
 const bot = new TelegramBot(TOKEN, { polling: true });
 
-// ===== Keyboards =====
-
+// Main menu keyboard (inline)
 function mainMenuKeyboard() {
   return {
     reply_markup: {
       inline_keyboard: [
         [
-          { text: 'View all proxies', callback_data: 'menu_list' },
-          { text: 'New proxy',        callback_data: 'menu_new' }
+          { text: "View all proxies", callback_data: "menu_list" },
+          { text: "New proxy", callback_data: "menu_new" }
         ],
         [
-          { text: 'Status',           callback_data: 'menu_status' },
-          { text: 'Delete proxy',     callback_data: 'menu_delete' }
+          { text: "Status", callback_data: "menu_status" },
+          { text: "Delete proxy", callback_data: "menu_delete" }
         ]
       ]
     }
   };
 }
 
-// Build inline keyboard for deleting proxies with pagination
+// Inline keyboard for list of proxies (connect buttons). 4 per row.
+function buildProxyListKeyboard(proxies) {
+  const rows = [];
+  const buttons = proxies.map((p) => {
+    const link = buildProxyLink(p.secret, p.port);
+    return {
+      text: `${p.name} (${p.port || "?"})`,
+      url: link
+    };
+  });
+
+  for (let i = 0; i < buttons.length; i += 4) {
+    rows.push(buttons.slice(i, i + 4));
+  }
+
+  return { inline_keyboard: rows };
+}
+
+// Inline keyboard for delete menu (4 per row + back)
 function buildDeleteKeyboard(proxies, page = 0, perPage = 8) {
   const start = page * perPage;
   const slice = proxies.slice(start, start + perPage);
 
   const rows = [];
   for (let i = 0; i < slice.length; i += 4) {
-    const row = slice.slice(i, i + 4).map(p => ({
-      text: p.name,
+    const row = slice.slice(i, i + 4).map((p) => ({
+      text: `${p.name} (${p.port || "?"})`,
       callback_data: `del_proxy:${p.id}`
     }));
     rows.push(row);
   }
 
-  const totalPages = Math.ceil(proxies.length / perPage);
+  const totalPages = Math.max(1, Math.ceil(proxies.length / perPage));
   const navRow = [];
-
   if (page > 0) {
-    navRow.push({ text: '⬅ Prev', callback_data: `del_page:${page - 1}` });
+    navRow.push({ text: "⬅ Prev", callback_data: `del_page:${page - 1}` });
   }
   if (page < totalPages - 1) {
-    navRow.push({ text: 'Next ➡', callback_data: `del_page:${page + 1}` });
+    navRow.push({ text: "Next ➡", callback_data: `del_page:${page + 1}` });
   }
   if (navRow.length > 0) rows.push(navRow);
 
+  rows.push([{ text: "⬅ Back to main menu", callback_data: "back_main" }]);
+
   return { inline_keyboard: rows };
 }
 
-// Build inline keyboard for viewing proxies (buttons with URL)
-function buildViewKeyboard(proxies, perRow = 2) {
-  const rows = [];
-  for (let i = 0; i < proxies.length; i += perRow) {
-    const slice = proxies.slice(i, i + perRow);
-    const row = slice.map(p => ({
-      text: `${p.name} (${p.port})`,
-      url: buildProxyLink(p.secret, p.port)
-    }));
-    rows.push(row);
-  }
-  return { inline_keyboard: rows };
-}
+// ---- Telegram handlers ----
 
-// ===== Helpers to call shell scripts =====
-
-function runScript(scriptName, args = [], callback) {
-  const scriptPath = path.join(SCRIPTS_DIR, scriptName);
-  execFile('bash', [scriptPath, ...args], (err, stdout, stderr) => {
-    if (err) {
-      console.error(`Script ${scriptName} failed:`, stderr || err.message);
-      return callback(err, null);
-    }
-    callback(null, stdout.trim());
-  });
-}
-
-// Parse list_proxies.sh output into objects
-// Expected format per line: id secret port name
-function parseProxyList(output) {
-  if (!output || output === 'NO_PROXIES') return [];
-  const lines = output.split('\n').map(l => l.trim()).filter(Boolean);
-  return lines.map((line, idx) => {
-    const parts = line.split(/\s+/);
-    return {
-      id: parts[0] || String(idx),
-      secret: parts[1] || '',
-      port: parts[2] || '',
-      name: parts[3] || parts[1] || `proxy_${idx + 1}`
-    };
-  });
-}
-
-// Build proxy link using config (DNS or IP)
-// If dnsName is set, it will be used instead of publicHost.
-function buildProxyLink(secret, port) {
-  const host = config.dnsName || config.publicHost || 'YOUR_DOMAIN_OR_IP';
-  return `tg://proxy?server=${host}&port=${port}&secret=${secret}`;
-}
-
-// ===== Commands & Handlers =====
-
-// /start
+// /start → main menu
 bot.onText(/\/start/, (msg) => {
   const chatId = msg.chat.id;
-  bot.sendMessage(chatId, 'Select an option:', mainMenuKeyboard());
+  bot.sendMessage(chatId, "Select an option:", mainMenuKeyboard());
 });
 
-// Optional text commands
-bot.onText(/\/new/, (msg) => {
-  handleNewProxyRequest(msg.chat.id);
-});
-bot.onText(/\/list/, (msg) => {
-  handleListRequest(msg.chat.id);
-});
-bot.onText(/\/status/, (msg) => {
-  handleStatusRequest(msg.chat.id);
-});
-bot.onText(/\/delete/, (msg) => {
-  handleDeleteMenu(msg.chat.id, 0);
+// Legacy commands: forward to same handlers
+bot.onText(/\/new/, (msg) => handleNewProxyRequest(msg.chat.id));
+bot.onText(/\/list/, (msg) => handleListRequest(msg.chat.id));
+bot.onText(/\/status/, (msg) => handleStatusRequest(msg.chat.id));
+bot.onText(/\/delete/, (msg) => handleDeleteMenu(msg.chat.id, 0));
+
+// We do not use plain text states any more, so ignore non-command messages
+bot.on("message", (msg) => {
+  if (msg.text && msg.text.startsWith("/")) return;
+  // no interactive text flows for now
 });
 
-// Text input handler (only used for custom port)
-bot.on('message', (msg) => {
-  const chatId = msg.chat.id;
-  const st = state[chatId];
-
-  if (!st || (msg.text && msg.text.startsWith('/'))) return;
-  const text = (msg.text || '').trim();
-
-  if (st.mode === 'new_proxy_port') {
-    const port = parseInt(text, 10);
-    if (!port || port <= 0 || port > 65535) {
-      bot.sendMessage(chatId, 'Invalid port. Please send a number between 1 and 65535.');
-      return;
-    }
-    state[chatId] = null;
-    createNewProxy(chatId, port, 'manual');
-    return;
-  }
-});
-
-// Callback query handler (inline keyboard)
-bot.on('callback_query', (query) => {
+// Single callback_query handler
+bot.on("callback_query", async (query) => {
   const chatId = query.message.chat.id;
-  const data = query.data || '';
+  const data = query.data || "";
 
-  // Main menu routes
-  if (data === 'menu_list') {
-    bot.answerCallbackQuery(query.id);
-    handleListRequest(chatId, query);
-    return;
-  }
-  if (data === 'menu_new') {
-    bot.answerCallbackQuery(query.id);
-    handleNewProxyRequest(chatId, query);
-    return;
-  }
-  if (data === 'menu_status') {
-    bot.answerCallbackQuery(query.id);
-    handleStatusRequest(chatId, query);
-    return;
-  }
-  if (data === 'menu_delete') {
-    bot.answerCallbackQuery(query.id);
-    handleDeleteMenu(chatId, 0, query);
-    return;
-  }
+  try {
+    switch (data) {
+      case "menu_list":
+        await handleListRequest(chatId, query);
+        break;
 
-  // New proxy port options
-  if (data === 'new_use_default') {
-    bot.answerCallbackQuery(query.id);
-    const defPort = loadDefaultPort();
-    createNewProxy(chatId, defPort, 'default');
-    return;
-  }
-  if (data === 'new_custom_port') {
-    bot.answerCallbackQuery(query.id);
-    state[chatId] = { mode: 'new_proxy_port' };
-    bot.sendMessage(chatId, 'Send the port number you want to use:');
-    return;
-  }
-  if (data === 'new_auto_port') {
-    bot.answerCallbackQuery(query.id);
-    createNewProxy(chatId, null, 'auto');
-    return;
-  }
+      case "menu_new":
+        await handleNewProxyRequest(chatId, query);
+        break;
 
-  // Delete menu pagination
-  if (data.startsWith('del_page:')) {
-    const page = parseInt(data.split(':')[1] || '0', 10) || 0;
-    bot.answerCallbackQuery(query.id);
-    handleDeleteMenu(chatId, page, query);
-    return;
+      case "menu_status":
+        await handleStatusRequest(chatId, query);
+        break;
+
+      case "menu_delete":
+        await handleDeleteMenu(chatId, 0, query);
+        break;
+
+      case "back_main":
+        await bot.editMessageText("Select an option:", {
+          chat_id: chatId,
+          message_id: query.message.message_id,
+          ...mainMenuKeyboard()
+        });
+        break;
+
+      default:
+        if (data.startsWith("del_page:")) {
+          const page = parseInt(data.split(":")[1] || "0", 10) || 0;
+          await handleDeleteMenu(chatId, page, query);
+        } else if (data.startsWith("del_proxy:")) {
+          const id = data.split(":")[1];
+          await handleDeleteProxy(chatId, id, query);
+        }
+        break;
+    }
+  } catch (e) {
+    console.error("callback_query handler error:", e);
+    // best-effort user feedback
+    bot.answerCallbackQuery(query.id, { text: "Error, please try again." });
   }
 
-  // Delete specific proxy
-  if (data.startsWith('del_proxy:')) {
-    const id = data.split(':')[1];
-    bot.answerCallbackQuery(query.id);
-    handleDeleteProxy(chatId, id, query);
-    return;
-  }
-
-  bot.answerCallbackQuery(query.id);
+  // Answer callback to remove loading animation
+  try {
+    await bot.answerCallbackQuery(query.id);
+  } catch (_) {}
 });
 
-// ===== Handlers =====
+// ---- High-level handlers ----
 
-function handleNewProxyRequest(chatId, query) {
-  const portInfo = loadDefaultPort();
-  const text =
-    `New proxy:\n` +
-    `Current default port: ${portInfo}\n\n` +
-    `Choose how to set the port:`;
-  const kb = {
+// 1) New proxy: one click = one proxy
+async function handleNewProxyRequest(chatId, query) {
+  if (query) await bot.answerCallbackQuery(query.id);
+
+  await bot.sendMessage(chatId, "Creating a new proxy, please wait...");
+
+  let out;
+  try {
+    out = await runScriptAsync("new_proxy.sh", []);
+  } catch (err) {
+    await bot.sendMessage(
+      chatId,
+      `Error creating proxy: ${err.message || "script failed"}`
+    );
+    return;
+  }
+
+  const lines = out.split("\n").filter(Boolean);
+  if (lines.length === 0) {
+    await bot.sendMessage(
+      chatId,
+      "Proxy script did not return any data. Please check new_proxy.sh."
+    );
+    return;
+  }
+
+  // Expect first line to describe the newly created proxy
+  const proxy = parseProxyLine(lines[0], 0);
+  const link = buildProxyLink(proxy.secret, proxy.port);
+
+  let text = "New proxy created.\n";
+  text += `Name: ${proxy.name}\n`;
+  text += `Port: \`${proxy.port || config.defaultPort}\`\n`;
+  text += `Secret: \`${proxy.secret}\`\n`;
+  text += `Link:\n${link}`;
+
+  const keyboard = {
     reply_markup: {
       inline_keyboard: [
-        [{ text: `Use default port (${portInfo})`, callback_data: 'new_use_default' }],
-        [{ text: 'Choose custom port',            callback_data: 'new_custom_port' }],
-        [{ text: 'Auto-select free port',         callback_data: 'new_auto_port' }]
+        [{ text: "🔗 Connect proxy", url: link }],
+        [{ text: "⬅ Back to main menu", callback_data: "back_main" }]
       ]
-    }
+    },
+    parse_mode: "Markdown"
   };
 
+  await bot.sendMessage(chatId, text, keyboard);
+}
+
+// 2) List all proxies (with connect buttons)
+async function handleListRequest(chatId, query) {
+  if (query) await bot.answerCallbackQuery(query.id);
+
+  let out;
+  try {
+    out = await runScriptAsync("list_proxies.sh", []);
+  } catch (err) {
+    await bot.sendMessage(
+      chatId,
+      "Error: could not list proxies. Please check server scripts."
+    );
+    return;
+  }
+
+  const proxies = parseProxyList(out);
+  if (proxies.length === 0) {
+    await bot.sendMessage(
+      chatId,
+      'There are no proxies yet.\nUse "New proxy" to create one.'
+    );
+    return;
+  }
+
+  let text = `Total proxies: ${proxies.length}\n\n`;
+  proxies.forEach((p, idx) => {
+    const link = buildProxyLink(p.secret, p.port);
+    text += `${idx + 1}. ${p.name} (port: ${p.port || "?"})\n${link}\n\n`;
+  });
+
+  const kb = buildProxyListKeyboard(proxies);
+
+  await bot.sendMessage(chatId, text, {
+    reply_markup: kb
+  });
+}
+
+// 3) Status: show per-port ONLINE/OFFLINE + raw stats output
+async function handleStatusRequest(chatId, query) {
+  if (query) await bot.answerCallbackQuery(query.id);
+
+  let listOut = "";
+  let statsOut = "";
+
+  try {
+    // List proxies to check each port status
+    listOut = await runScriptAsync("list_proxies.sh", []);
+  } catch (err) {
+    listOut = "";
+  }
+
+  try {
+    // Optional: extra stats script (may fail, it's fine)
+    statsOut = await runScriptAsync("stats_proxy.sh", []);
+  } catch (err) {
+    statsOut = "";
+  }
+
+  const proxies = parseProxyList(listOut);
+  let text = "Stats:\n";
+
+  if (proxies.length === 0) {
+    text += "Stored proxies: 0\n\n";
+  } else {
+    text += `Stored proxies: ${proxies.length}\n\n`;
+    text += "Per-proxy status (by port):\n";
+
+    const statuses = await Promise.all(
+      proxies.map((p) => checkPortStatus(p.port))
+    );
+
+    proxies.forEach((p, idx) => {
+      const st = statuses[idx];
+      text += ` • ${p.name} (port ${p.port || "?"}) → ${st}\n`;
+    });
+
+    text += "\n";
+  }
+
+  if (statsOut) {
+    text += "Raw stats from server:\n";
+    text += statsOut;
+  } else {
+    text += "No extra stats available (stats script not reachable).";
+  }
+
+  await bot.sendMessage(chatId, text);
+}
+
+// 4) Delete menu (paginated)
+async function handleDeleteMenu(chatId, page = 0, query) {
+  if (query) await bot.answerCallbackQuery(query.id);
+
+  let out;
+  try {
+    out = await runScriptAsync("list_proxies.sh", []);
+  } catch (err) {
+    await bot.sendMessage(chatId, "Error: could not list proxies.");
+    return;
+  }
+
+  const proxies = parseProxyList(out);
+  if (proxies.length === 0) {
+    await bot.sendMessage(chatId, "There are no proxies to delete.");
+    return;
+  }
+
+  const kb = buildDeleteKeyboard(proxies, page);
+  const text = `Select a proxy to delete:\nTotal proxies: ${proxies.length}`;
+
   if (query) {
-    bot.editMessageText(text, {
+    await bot.editMessageText(text, {
       chat_id: chatId,
       message_id: query.message.message_id,
-      ...kb
+      reply_markup: kb.inline_keyboard
     });
   } else {
-    bot.sendMessage(chatId, text, kb);
+    await bot.sendMessage(chatId, text, { reply_markup: kb.inline_keyboard });
   }
 }
 
-// Create new proxy via script
-function createNewProxy(chatId, port, mode = 'default') {
-  const args = [];
-
-  // this script will enforce free-port logic itself
-  if (mode === 'default' && port) {
-    args.push('--port', String(port));
-  } else if (mode === 'auto') {
-    args.push('--port', 'auto');
-  } else if (port) {
-    args.push('--port', String(port));
+// 5) Delete proxy by id
+async function handleDeleteProxy(chatId, id, query) {
+  try {
+    const out = await runScriptAsync("delete_proxy.sh", [id]);
+    await bot.answerCallbackQuery(query.id, { text: "Proxy removed." });
+    await bot.sendMessage(
+      chatId,
+      `Proxy removed.\n${out ? String(out) : ""}`
+    );
+  } catch (err) {
+    await bot.answerCallbackQuery(query.id, { text: "Error deleting proxy" });
+    await bot.sendMessage(
+      chatId,
+      `Error deleting proxy: ${err.message || "script failed"}`
+    );
   }
-
-  runScript('new_proxy.sh', args, (err, out) => {
-    if (err) {
-      bot.sendMessage(chatId, `Error creating proxy: ${err.message}`);
-      return;
-    }
-
-    const lines = out.split('\n').filter(Boolean);
-    const first = lines[0] || '';
-    const parts = first.split(/\s+/);
-    const secret = parts[0] || '';
-    const realPort = parts[1] || port || loadDefaultPort();
-    const name = parts[2] || '';
-    const link = buildProxyLink(secret, realPort);
-
-    let msg = 'New proxy created.\n';
-    msg += `Name: \`${name}\`\n`;
-    msg += `Secret: \`${secret}\`\n`;
-    msg += `Port: \`${realPort}\`\n`;
-    msg += `Link:\n${link}`;
-
-    bot.sendMessage(chatId, msg, { parse_mode: 'Markdown' });
-  });
-}
-
-// List proxies (now with inline buttons)
-function handleListRequest(chatId, query) {
-  runScript('list_proxies.sh', [], (err, out) => {
-    if (err) {
-      bot.sendMessage(chatId, 'Error: could not list proxies. Please check server scripts.');
-      return;
-    }
-    const proxies = parseProxyList(out);
-    if (proxies.length === 0) {
-      bot.sendMessage(chatId, 'There are no proxies yet. Use "New proxy" to create one.');
-      return;
-    }
-
-    const kb = buildViewKeyboard(proxies, 2);
-    const text = `Total proxies: ${proxies.length}\nTap a button to open the proxy link:`;
-
-    bot.sendMessage(chatId, text, { reply_markup: kb });
-  });
-}
-
-// Status
-function handleStatusRequest(chatId, query) {
-  runScript('stats_proxy.sh', [], (err, out) => {
-    if (err) {
-      bot.sendMessage(chatId, 'Error: could not read proxy stats. Please check stats script.');
-      return;
-    }
-    const text = out || 'No stats available.';
-    bot.sendMessage(chatId, `Stats:\n${text}`);
-  });
-}
-
-// Delete menu (paginated)
-function handleDeleteMenu(chatId, page = 0, query) {
-  runScript('list_proxies.sh', [], (err, out) => {
-    if (err) {
-      bot.sendMessage(chatId, 'Error: could not list proxies.');
-      return;
-    }
-    const proxies = parseProxyList(out);
-    if (proxies.length === 0) {
-      bot.sendMessage(chatId, 'There are no proxies to delete.');
-      return;
-    }
-
-    const kb = buildDeleteKeyboard(proxies, page);
-    const text = `Select a proxy to delete:\nTotal proxies: ${proxies.length}`;
-    if (query) {
-      bot.editMessageText(text, {
-        chat_id: chatId,
-        message_id: query.message.message_id,
-        reply_markup: kb
-      });
-    } else {
-      bot.sendMessage(chatId, text, { reply_markup: kb });
-    }
-  });
-}
-
-// Delete proxy by id
-function handleDeleteProxy(chatId, id, query) {
-  runScript('delete_proxy.sh', [id], (err, out) => {
-    if (err) {
-      bot.sendMessage(chatId, `Error deleting proxy: ${err.message}`);
-      return;
-    }
-    const msg = out || 'Proxy removed.';
-    bot.sendMessage(chatId, msg);
-  });
 }
