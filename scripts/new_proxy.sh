@@ -17,27 +17,43 @@ PROXY_DB_FILE="$DATA_DIR/proxies.txt"
 mkdir -p "$DATA_DIR"
 touch "$PROXY_DB_FILE"
 
-# Optional: port as first argument (otherwise create_proxy.sh uses default_port/443)
-if [ $# -ge 1 ]; then
-  CREATE_OUT="$("$SCRIPT_DIR/create_proxy.sh" "$1")"
-else
-  CREATE_OUT="$("$SCRIPT_DIR/create_proxy.sh")"
+# Call create_proxy.sh and capture its output
+CREATE_SCRIPT="$SCRIPT_DIR/create_proxy.sh"
+if [ ! -x "$CREATE_SCRIPT" ]; then
+  echo "ERROR: create_proxy.sh is not executable or not found at $CREATE_SCRIPT" >&2
+  exit 1
 fi
 
-# Parse key=value style output
-SECRET="$(printf '%s\n' "$CREATE_OUT" | sed -n 's/^SECRET=\(.*\)$/\1/p')"
-PORT="$(printf '%s\n' "$CREATE_OUT" | sed -n 's/^PORT=\(.*\)$/\1/p')"
-TG_LINK="$(printf '%s\n' "$CREATE_OUT" | sed -n 's/^TG_LINK=\(.*\)$/\1/p')"
+CREATE_OUT=""
+if [ "${1-}" != "" ]; then
+  # Optional port argument
+  CREATE_OUT="$("$CREATE_SCRIPT" "$1")"
+else
+  CREATE_OUT="$("$CREATE_SCRIPT")"
+fi
 
-if [ -z "${SECRET:-}" ] || [ -z "${PORT:-}" ]; then
-  echo "ERROR: create_proxy.sh did not return SECRET/PORT" >&2
-  echo "Raw output was:" >&2
-  printf '%s\n' "$CREATE_OUT" >&2
+# Parse SECRET, PORT, TG_LINK from create_proxy.sh output
+SECRET="$(echo "$CREATE_OUT" | sed -n 's/^SECRET=//p' | head -n 1)"
+PORT="$(echo "$CREATE_OUT" | sed -n 's/^PORT=//p' | head -n 1)"
+TG_LINK="$(echo "$CREATE_OUT" | sed -n 's/^TG_LINK=//p' | head -n 1)"
+
+if [ -z "$SECRET" ]; then
+  echo "ERROR: SECRET is empty (create_proxy.sh output was: $CREATE_OUT)" >&2
+  exit 1
+fi
+
+if [ -z "$PORT" ]; then
+  echo "ERROR: PORT is empty (create_proxy.sh output was: $CREATE_OUT)" >&2
   exit 1
 fi
 
 if ! echo "$PORT" | grep -Eq '^[0-9]+$'; then
   echo "ERROR: PORT is not numeric: $PORT" >&2
+  exit 1
+fi
+
+if [ -z "$TG_LINK" ]; then
+  echo "ERROR: TG_LINK is empty (create_proxy.sh output was: $CREATE_OUT)" >&2
   exit 1
 fi
 
