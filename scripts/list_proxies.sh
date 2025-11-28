@@ -1,8 +1,11 @@
 #!/bin/bash
-# list_proxies.sh
+# scripts/list_proxies.sh
 # List all stored proxies from data/proxies.txt
-# Output format per line: id secret port name
+# Output format per line:
+#   ID SECRET PORT NAME TG_LINK
 # If there are no proxies, prints "NO_PROXIES".
+
+set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 ROOT_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
@@ -14,10 +17,9 @@ if [ ! -f "$PROXY_DB_FILE" ]; then
   exit 0
 fi
 
-if ! grep -q '.' "$PROXY_DB_FILE" 2>/dev/null; then
+if ! grep -q '.' "$PROXY_DB_FILE"; then
   echo "NO_PROXIES"
   exit 0
 fi
 
-# Just print the file as-is
 cat "$PROXY_DB_FILE"

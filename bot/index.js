@@ -10,130 +10,76 @@ const TelegramBot = require("node-telegram-bot-api");
 const TOKEN = "TOKEN_HERE";
 
 if (!TOKEN || TOKEN === "TOKEN_HERE") {
-  console.error("ERROR: Bot token is not set. Run the installer script first.");
+  console.error("ERROR: Bot token is not set. Run mtpromonitor.sh and set the token first.");
   process.exit(1);
 }
 
-// Paths
 const ROOT_DIR = path.join(__dirname, "..");
-const DATA_DIR = path.join(ROOT_DIR, "data");
 const SCRIPTS_DIR = path.join(ROOT_DIR, "scripts");
-const CONFIG_PATH = path.join(DATA_DIR, "config.json");
+const DATA_DIR = path.join(ROOT_DIR, "data");
 
-// Default config values
-const DEFAULT_CONFIG = {
-  publicHost: "",
-  dnsName: "",
-  defaultPort: 2033 // default port if scripts do not return one
-};
-
-// Ensure data dir exists
 if (!fs.existsSync(DATA_DIR)) {
   fs.mkdirSync(DATA_DIR, { recursive: true });
 }
 
-// ---- Config helpers ----
-function loadConfig() {
-  try {
-    const raw = fs.readFileSync(CONFIG_PATH, "utf8");
-    const cfg = JSON.parse(raw);
-    return { ...DEFAULT_CONFIG, ...cfg };
-  } catch {
-    return { ...DEFAULT_CONFIG };
-  }
-}
+// ---- Helpers to run shell scripts ----
 
-function saveConfig(cfg) {
-  const merged = { ...DEFAULT_CONFIG, ...cfg };
-  fs.writeFileSync(CONFIG_PATH, JSON.stringify(merged, null, 2));
-  return merged;
-}
-
-let config = loadConfig();
-
-// ---- Shell helpers ----
-function runScript(scriptName, args = [], callback) {
-  const scriptPath = path.join(SCRIPTS_DIR, scriptName);
-  execFile("bash", [scriptPath, ...args], (err, stdout, stderr) => {
-    if (err) {
-      console.error(`Script ${scriptName} failed:`, stderr || err.message);
-      return callback(err, null);
-    }
-    callback(null, (stdout || "").trim());
-  });
-}
-
-// Promise wrapper (for async/await)
-function runScriptAsync(scriptName, args = []) {
+function runScript(scriptName, args = []) {
   return new Promise((resolve, reject) => {
-    runScript(scriptName, args, (err, out) => {
-      if (err) return reject(err);
-      resolve(out);
+    const scriptPath = path.join(SCRIPTS_DIR, scriptName);
+
+    execFile(scriptPath, args, { cwd: ROOT_DIR }, (error, stdout, stderr) => {
+      if (error) {
+        const err = new Error(
+          `Script ${scriptName} failed: ${error.message}\nSTDERR: ${stderr || "N/A"}`
+        );
+        reject(err);
+        return;
+      }
+      resolve(stdout.trim());
     });
   });
 }
 
-// Check if a TCP port is listening (ON/OFF) using "ss"
-function checkPortStatus(port) {
-  return new Promise((resolve) => {
-    if (!port) return resolve("UNKNOWN");
-    const cmd = `ss -tuln 2>/dev/null | grep -q ":${port} " && echo ON || echo OFF`;
-    execFile("bash", ["-c", cmd], (err, stdout) => {
-      if (err) return resolve("UNKNOWN");
-      const out = (stdout || "").trim();
-      if (out === "ON") return resolve("ONLINE");
-      if (out === "OFF") return resolve("OFFLINE");
-      return resolve("UNKNOWN");
-    });
-  });
+function getDefaultPort() {
+  const file = path.join(DATA_DIR, "default_port");
+  try {
+    const s = fs.readFileSync(file, "utf8").trim();
+    const n = parseInt(s, 10);
+    if (!Number.isNaN(n) && n > 0 && n < 65536) return n;
+  } catch {
+    // ignore
+  }
+  return 443;
 }
 
-// ---- Proxy helpers ----
+// Parse one proxy line: ID SECRET PORT NAME [TG_LINK]
+function parseProxyLine(line) {
+  const parts = line.trim().split(/\s+/);
+  if (parts.length < 4) return null;
 
-// Parse a line of proxy info.
-//
-// We try to be robust with the format. Example supported formats:
-//   "proxy_2025_01 9b1f2c... 2033"
-//   "id1 proxy_2025_01 9b1f2c... 2033"
-// Anything that looks like 32 hex chars is secret,
-// anything that looks like a number 1-65535 is port,
-// and the first token that is not secret/port is name.
-function parseProxyLine(line, fallbackIndex) {
-  const parts = line.split(/\s+/).filter(Boolean);
+  const [id, secret, portStr, ...rest] = parts;
+  const port = parseInt(portStr, 10);
+
   let name = "";
-  let secret = "";
-  let port = "";
-  let id = String(fallbackIndex);
+  let tgLink = "";
 
-  const hex32 = /^[0-9a-fA-F]{32}$/;
-  const portRe = /^[0-9]{1,5}$/;
-
-  for (const p of parts) {
-    if (!secret && hex32.test(p)) {
-      secret = p;
-      continue;
-    }
-    if (!port && portRe.test(p)) {
-      port = p;
-      continue;
-    }
+  if (rest.length === 1) {
+    name = rest[0];
+  } else if (rest.length >= 2) {
+    name = rest.slice(0, rest.length - 1).join(" ");
+    tgLink = rest[rest.length - 1];
   }
 
-  // Collect name/id from remaining tokens
-  const others = parts.filter((p) => p !== secret && p !== port);
-  if (others.length > 0) {
-    name = others[0];
-    if (others.length > 1) {
-      id = others[0]; // treat first token as id if present
-    }
-  } else {
-    name = `proxy_${fallbackIndex + 1}`;
-  }
-
-  return { id, name, secret, port };
+  return {
+    id,
+    secret,
+    port: Number.isNaN(port) ? null : port,
+    name,
+    tgLink,
+  };
 }
 
-// Parse list_proxies script output into objects
 function parseProxyList(output) {
   if (!output) return [];
   const lines = output
@@ -141,346 +87,367 @@ function parseProxyList(output) {
     .map((l) => l.trim())
     .filter((l) => l && !/^NO_PROXIES/i.test(l));
 
-  return lines.map((line, idx) => parseProxyLine(line, idx));
-}
-
-// Build tg://proxy link using config (DNS > IP)
-function buildProxyLink(secret, port) {
-  const host = config.dnsName || config.publicHost || "YOUR_IP_HERE";
-  if (!secret || !port) {
-    return "tg://proxy?server=" + host;
+  const proxies = [];
+  for (const line of lines) {
+    const p = parseProxyLine(line);
+    if (p) proxies.push(p);
   }
-  return `tg://proxy?server=${host}&port=${port}&secret=${secret}`;
+  return proxies;
 }
 
-// ---- Telegram bot ----
+function proxyToText(p) {
+  const lines = [];
+  lines.push(`🆔 شناسه: <code>${p.id}</code>`);
+  if (p.name) {
+    lines.push(`📛 نام: <b>${p.name}</b>`);
+  }
+  if (p.port) {
+    lines.push(`🔌 پورت: <code>${p.port}</code>`);
+  }
+  lines.push(`🔑 سکرت:\n<code>${p.secret}</code>`);
+  if (p.tgLink) {
+    lines.push("");
+    lines.push(`🔗 لینک آماده:\n<code>${p.tgLink}</code>`);
+  }
+  return lines.join("\n");
+}
+
+// ---- Telegram bot setup ----
 
 const bot = new TelegramBot(TOKEN, { polling: true });
 
-// Main menu keyboard (inline)
+// Simple per-chat state (e.g. waiting for delete ID)
+const chatState = new Map();
+
 function mainMenuKeyboard() {
   return {
     reply_markup: {
-      inline_keyboard: [
-        [
-          { text: "View all proxies", callback_data: "menu_list" },
-          { text: "New proxy", callback_data: "menu_new" }
-        ],
-        [
-          { text: "Status", callback_data: "menu_status" },
-          { text: "Delete proxy", callback_data: "menu_delete" }
-        ]
-      ]
-    }
-  };
-}
-
-// Inline keyboard for list of proxies (connect buttons). 4 per row.
-function buildProxyListKeyboard(proxies) {
-  const rows = [];
-  const buttons = proxies.map((p) => {
-    const link = buildProxyLink(p.secret, p.port);
-    return {
-      text: `${p.name} (${p.port || "?"})`,
-      url: link
-    };
-  });
-
-  for (let i = 0; i < buttons.length; i += 4) {
-    rows.push(buttons.slice(i, i + 4));
-  }
-
-  return { inline_keyboard: rows };
-}
-
-// Inline keyboard for delete menu (4 per row + back)
-function buildDeleteKeyboard(proxies, page = 0, perPage = 8) {
-  const start = page * perPage;
-  const slice = proxies.slice(start, start + perPage);
-
-  const rows = [];
-  for (let i = 0; i < slice.length; i += 4) {
-    const row = slice.slice(i, i + 4).map((p) => ({
-      text: `${p.name} (${p.port || "?"})`,
-      callback_data: `del_proxy:${p.id}`
-    }));
-    rows.push(row);
-  }
-
-  const totalPages = Math.max(1, Math.ceil(proxies.length / perPage));
-  const navRow = [];
-  if (page > 0) {
-    navRow.push({ text: "⬅ Prev", callback_data: `del_page:${page - 1}` });
-  }
-  if (page < totalPages - 1) {
-    navRow.push({ text: "Next ➡", callback_data: `del_page:${page + 1}` });
-  }
-  if (navRow.length > 0) rows.push(navRow);
-
-  rows.push([{ text: "⬅ Back to main menu", callback_data: "back_main" }]);
-
-  return { inline_keyboard: rows };
-}
-
-// ---- Telegram handlers ----
-
-// /start → main menu
-bot.onText(/\/start/, (msg) => {
-  const chatId = msg.chat.id;
-  bot.sendMessage(chatId, "Select an option:", mainMenuKeyboard());
-});
-
-// Legacy commands: forward to same handlers
-bot.onText(/\/new/, (msg) => handleNewProxyRequest(msg.chat.id));
-bot.onText(/\/list/, (msg) => handleListRequest(msg.chat.id));
-bot.onText(/\/status/, (msg) => handleStatusRequest(msg.chat.id));
-bot.onText(/\/delete/, (msg) => handleDeleteMenu(msg.chat.id, 0));
-
-// We do not use plain text states any more, so ignore non-command messages
-bot.on("message", (msg) => {
-  if (msg.text && msg.text.startsWith("/")) return;
-  // no interactive text flows for now
-});
-
-// Single callback_query handler
-bot.on("callback_query", async (query) => {
-  const chatId = query.message.chat.id;
-  const data = query.data || "";
-
-  try {
-    switch (data) {
-      case "menu_list":
-        await handleListRequest(chatId, query);
-        break;
-
-      case "menu_new":
-        await handleNewProxyRequest(chatId, query);
-        break;
-
-      case "menu_status":
-        await handleStatusRequest(chatId, query);
-        break;
-
-      case "menu_delete":
-        await handleDeleteMenu(chatId, 0, query);
-        break;
-
-      case "back_main":
-        await bot.editMessageText("Select an option:", {
-          chat_id: chatId,
-          message_id: query.message.message_id,
-          ...mainMenuKeyboard()
-        });
-        break;
-
-      default:
-        if (data.startsWith("del_page:")) {
-          const page = parseInt(data.split(":")[1] || "0", 10) || 0;
-          await handleDeleteMenu(chatId, page, query);
-        } else if (data.startsWith("del_proxy:")) {
-          const id = data.split(":")[1];
-          await handleDeleteProxy(chatId, id, query);
-        }
-        break;
-    }
-  } catch (e) {
-    console.error("callback_query handler error:", e);
-    // best-effort user feedback
-    bot.answerCallbackQuery(query.id, { text: "Error, please try again." });
-  }
-
-  // Answer callback to remove loading animation
-  try {
-    await bot.answerCallbackQuery(query.id);
-  } catch (_) {}
-});
-
-// ---- High-level handlers ----
-
-// 1) New proxy: one click = one proxy
-async function handleNewProxyRequest(chatId, query) {
-  if (query) await bot.answerCallbackQuery(query.id);
-
-  await bot.sendMessage(chatId, "Creating a new proxy, please wait...");
-
-  let out;
-  try {
-    out = await runScriptAsync("new_proxy.sh", []);
-  } catch (err) {
-    await bot.sendMessage(
-      chatId,
-      `Error creating proxy: ${err.message || "script failed"}`
-    );
-    return;
-  }
-
-  const lines = out.split("\n").filter(Boolean);
-  if (lines.length === 0) {
-    await bot.sendMessage(
-      chatId,
-      "Proxy script did not return any data. Please check new_proxy.sh."
-    );
-    return;
-  }
-
-  // Expect first line to describe the newly created proxy
-  const proxy = parseProxyLine(lines[0], 0);
-  const link = buildProxyLink(proxy.secret, proxy.port);
-
-  let text = "New proxy created.\n";
-  text += `Name: ${proxy.name}\n`;
-  text += `Port: \`${proxy.port || config.defaultPort}\`\n`;
-  text += `Secret: \`${proxy.secret}\`\n`;
-  text += `Link:\n${link}`;
-
-  const keyboard = {
-    reply_markup: {
-      inline_keyboard: [
-        [{ text: "🔗 Connect proxy", url: link }],
-        [{ text: "⬅ Back to main menu", callback_data: "back_main" }]
-      ]
+      keyboard: [
+        [{ text: "➕ پروکسی جدید" }],
+        [{ text: "📋 لیست پروکسی‌ها" }],
+        [{ text: "ℹ️ وضعیت و پورت پیش‌فرض" }],
+        [{ text: "🗑 حذف پروکسی" }],
+      ],
+      resize_keyboard: true,
+      one_time_keyboard: false,
     },
-    parse_mode: "Markdown"
   };
-
-  await bot.sendMessage(chatId, text, keyboard);
 }
 
-// 2) List all proxies (with connect buttons)
-async function handleListRequest(chatId, query) {
-  if (query) await bot.answerCallbackQuery(query.id);
+// ---- Command handlers ----
 
-  let out;
-  try {
-    out = await runScriptAsync("list_proxies.sh", []);
-  } catch (err) {
-    await bot.sendMessage(
-      chatId,
-      "Error: could not list proxies. Please check server scripts."
-    );
-    return;
-  }
+bot.onText(/^\/start$/, (msg) => {
+  const chatId = msg.chat.id;
+  const defaultPort = getDefaultPort();
+  bot.sendMessage(
+    chatId,
+    `سلام 👋\n\nاین ربات برای مدیریت MTProto Proxy روی سرور شماست.\n\nپورت پیش‌فرض فعلی: <code>${defaultPort}</code>\n\nاز دکمه‌های زیر استفاده کن.`,
+    {
+      parse_mode: "HTML",
+      ...mainMenuKeyboard(),
+    }
+  );
+});
 
-  const proxies = parseProxyList(out);
-  if (proxies.length === 0) {
-    await bot.sendMessage(
-      chatId,
-      'There are no proxies yet.\nUse "New proxy" to create one.'
-    );
-    return;
-  }
+bot.onText(/^\/help$/, (msg) => {
+  const chatId = msg.chat.id;
+  bot.sendMessage(
+    chatId,
+    `راهنما:\n\n` +
+      `• از دکمه «➕ پروکسی جدید» برای ساخت سکرت جدید روی پورت پیش‌فرض استفاده کن.\n` +
+      `• «📋 لیست پروکسی‌ها» همهٔ پروکسی‌های ثبت‌شده را نشان می‌دهد.\n` +
+      `• «ℹ️ وضعیت و پورت پیش‌فرض» وضعیت mtproxy و پورت‌ها را نشان می‌دهد.\n` +
+      `• «🗑 حذف پروکسی» اجازه می‌دهد یک پروکسی را با شناسه‌اش حذف کنی.\n\n` +
+      `/start برای نمایش منوی اصلی.`,
+    {
+      parse_mode: "HTML",
+      ...mainMenuKeyboard(),
+    }
+  );
+});
 
-  let text = `Total proxies: ${proxies.length}\n\n`;
-  proxies.forEach((p, idx) => {
-    const link = buildProxyLink(p.secret, p.port);
-    text += `${idx + 1}. ${p.name} (port: ${p.port || "?"})\n${link}\n\n`;
-  });
-
-  const kb = buildProxyListKeyboard(proxies);
-
-  await bot.sendMessage(chatId, text, {
-    reply_markup: kb
-  });
-}
-
-// 3) Status: show per-port ONLINE/OFFLINE + raw stats output
-async function handleStatusRequest(chatId, query) {
-  if (query) await bot.answerCallbackQuery(query.id);
-
-  let listOut = "";
-  let statsOut = "";
-
-  try {
-    // List proxies to check each port status
-    listOut = await runScriptAsync("list_proxies.sh", []);
-  } catch (err) {
-    listOut = "";
-  }
-
-  try {
-    // Optional: extra stats script (may fail, it's fine)
-    statsOut = await runScriptAsync("stats_proxy.sh", []);
-  } catch (err) {
-    statsOut = "";
-  }
-
-  const proxies = parseProxyList(listOut);
-  let text = "Stats:\n";
-
-  if (proxies.length === 0) {
-    text += "Stored proxies: 0\n\n";
-  } else {
-    text += `Stored proxies: ${proxies.length}\n\n`;
-    text += "Per-proxy status (by port):\n";
-
-    const statuses = await Promise.all(
-      proxies.map((p) => checkPortStatus(p.port))
-    );
-
-    proxies.forEach((p, idx) => {
-      const st = statuses[idx];
-      text += ` • ${p.name} (port ${p.port || "?"}) → ${st}\n`;
+bot.onText(/^\/delete\s+(\S+)/, async (msg, match) => {
+  const chatId = msg.chat.id;
+  const id = (match[1] || "").trim();
+  if (!id) {
+    bot.sendMessage(chatId, "شناسه پروکسی نامعتبر است.", {
+      parse_mode: "HTML",
+      ...mainMenuKeyboard(),
     });
+    return;
+  }
+  await doDeleteProxy(chatId, id);
+});
 
-    text += "\n";
+// ---- Generic message handler (buttons + simple states) ----
+
+bot.on("message", async (msg) => {
+  const chatId = msg.chat.id;
+  const text = (msg.text || "").trim();
+
+  if (text.startsWith("/start") || text.startsWith("/help") || text.startsWith("/delete")) {
+    return; // already handled
   }
 
-  if (statsOut) {
-    text += "Raw stats from server:\n";
-    text += statsOut;
-  } else {
-    text += "No extra stats available (stats script not reachable).";
+  const state = chatState.get(chatId);
+
+  if (state && state.mode === "await_delete_id") {
+    const id = text;
+    chatState.delete(chatId);
+    await doDeleteProxy(chatId, id);
+    return;
   }
 
-  await bot.sendMessage(chatId, text);
+  if (text === "➕ پروکسی جدید") {
+    await handleCreateProxy(chatId);
+    return;
+  }
+
+  if (text === "📋 لیست پروکسی‌ها") {
+    await handleListProxies(chatId);
+    return;
+  }
+
+  if (text === "ℹ️ وضعیت و پورت پیش‌فرض") {
+    await handleStatus(chatId);
+    return;
+  }
+
+  if (text === "🗑 حذف پروکسی") {
+    chatState.set(chatId, { mode: "await_delete_id" });
+    bot.sendMessage(
+      chatId,
+      "لطفاً شناسه پروکسی‌ای که می‌خواهی حذف شود را ارسال کن (🆔 در لیست پروکسی‌ها).",
+      {
+        parse_mode: "HTML",
+        ...mainMenuKeyboard(),
+      }
+    );
+    return;
+  }
+
+  // Fallback
+  bot.sendMessage(
+    chatId,
+    "لطفاً یکی از گزینه‌های منو را انتخاب کن یا از /help استفاده کن.",
+    {
+      parse_mode: "HTML",
+      ...mainMenuKeyboard(),
+    }
+  );
+});
+
+// ---- Feature: Create proxy ----
+
+async function handleCreateProxy(chatId) {
+  try {
+    const defaultPort = getDefaultPort();
+    await bot.sendMessage(
+      chatId,
+      `⏳ در حال ساخت پروکسی جدید روی پورت پیش‌فرض <code>${defaultPort}</code>...`,
+      { parse_mode: "HTML" }
+    );
+
+    const out = await runScript("new_proxy.sh");
+    const p = parseProxyLine(out);
+
+    if (!p) {
+      await bot.sendMessage(
+        chatId,
+        "❌ ساخت پروکسی با خطا مواجه شد (خروجی اسکریپت قابل‌خواندن نبود).",
+        { parse_mode: "HTML" }
+      );
+      return;
+    }
+
+    // Try to detect TG_LINK from the raw output if not parsed
+    const tokens = out.trim().split(/\s+/);
+    if (!p.tgLink && tokens.length >= 5) {
+      p.tgLink = tokens[tokens.length - 1];
+    }
+
+    const msgText =
+      "✅ پروکسی جدید ساخته شد.\n\n" +
+      proxyToText(p) +
+      "\n\n⚠️ توجه: این پروکسی روی همان پورتی است که در mtproxy تنظیم کرده‌ای.";
+
+    await bot.sendMessage(chatId, msgText, { parse_mode: "HTML", ...mainMenuKeyboard() });
+  } catch (err) {
+    console.error(err);
+    await bot.sendMessage(
+      chatId,
+      "❌ هنگام اجرای اسکریپت ساخت پروکسی خطایی رخ داد.\n" +
+        "لطفاً روی سرور این دستور را چک کن:\n" +
+        "<code>cd /opt/MTproMonitorbot && ./scripts/new_proxy.sh</code>",
+      { parse_mode: "HTML", ...mainMenuKeyboard() }
+    );
+  }
 }
 
-// 4) Delete menu (paginated)
-async function handleDeleteMenu(chatId, page = 0, query) {
-  if (query) await bot.answerCallbackQuery(query.id);
+// ---- Feature: List proxies ----
 
-  let out;
+async function handleListProxies(chatId) {
   try {
-    out = await runScriptAsync("list_proxies.sh", []);
+    const out = await runScript("list_proxies.sh");
+    if (!out || /^NO_PROXIES/i.test(out.trim())) {
+      await bot.sendMessage(
+        chatId,
+        "هنوز هیچ پروکسی ثبت نشده است. از «➕ پروکسی جدید» استفاده کن.",
+        { parse_mode: "HTML", ...mainMenuKeyboard() }
+      );
+      return;
+    }
+
+    const proxies = parseProxyList(out);
+    if (!proxies.length) {
+      await bot.sendMessage(
+        chatId,
+        "فایلی از پروکسی‌ها پیدا شد، اما نتوانستم آن را بخوانم.",
+        { parse_mode: "HTML", ...mainMenuKeyboard() }
+      );
+      return;
+    }
+
+    const chunks = [];
+    let current = [];
+
+    for (const p of proxies) {
+      const block = proxyToText(p);
+      const joined = current.join("\n\n");
+      if ((joined.length + block.length) > 3500 && current.length) {
+        chunks.push(joined);
+        current = [];
+      }
+      current.push(block);
+    }
+    if (current.length) {
+      chunks.push(current.join("\n\n"));
+    }
+
+    for (let i = 0; i < chunks.length; i++) {
+      const header = i === 0 ? "📋 لیست پروکسی‌های ثبت‌شده:\n\n" : "";
+      await bot.sendMessage(chatId, header + chunks[i], {
+        parse_mode: "HTML",
+        ...mainMenuKeyboard(),
+      });
+    }
   } catch (err) {
-    await bot.sendMessage(chatId, "Error: could not list proxies.");
-    return;
+    console.error(err);
+    await bot.sendMessage(
+      chatId,
+      "❌ هنگام دریافت لیست پروکسی‌ها خطایی رخ داد.\n" +
+        "لطفاً روی سرور این دستور را چک کن:\n" +
+        "<code>cd /opt/MTproMonitorbot && ./scripts/list_proxies.sh</code>",
+      { parse_mode: "HTML", ...mainMenuKeyboard() }
+    );
   }
+}
 
-  const proxies = parseProxyList(out);
-  if (proxies.length === 0) {
-    await bot.sendMessage(chatId, "There are no proxies to delete.");
-    return;
-  }
+// ---- Feature: Status ----
 
-  const kb = buildDeleteKeyboard(proxies, page);
-  const text = `Select a proxy to delete:\nTotal proxies: ${proxies.length}`;
+async function handleStatus(chatId) {
+  const defaultPort = getDefaultPort();
 
-  if (query) {
-    await bot.editMessageText(text, {
-      chat_id: chatId,
-      message_id: query.message.message_id,
-      reply_markup: kb.inline_keyboard
+  try {
+    const out = await runScript("stats_proxy.sh");
+    const lines = out.split("\n").map((l) => l.trim());
+
+    let proxyCount = null;
+    let byPort = null;
+    let mtStatus = null;
+    let listening = null;
+
+    for (const line of lines) {
+      if (line.startsWith("PROXY_COUNT=")) {
+        proxyCount = line.substring("PROXY_COUNT=".length);
+      } else if (line.startsWith("BY_PORT=")) {
+        byPort = line.substring("BY_PORT=".length);
+      } else if (line.startsWith("MTPROXY_SERVICE=")) {
+        mtStatus = line.substring("MTPROXY_SERVICE=".length);
+      } else if (line.startsWith("LISTENING_PORTS=")) {
+        listening = line.substring("LISTENING_PORTS=".length);
+      }
+    }
+
+    let text = `ℹ️ وضعیت فعلی:\n\nپورت پیش‌فرض: <code>${defaultPort}</code>\n`;
+
+    if (proxyCount !== null) {
+      text += `تعداد پروکسی‌های ثبت‌شده در فایل: <b>${proxyCount}</b>\n`;
+    }
+
+    if (byPort) {
+      text += `پراکسی‌ها بر اساس پورت: <code>${byPort}</code>\n`;
+    }
+
+    if (mtStatus) {
+      const human =
+        mtStatus === "active"
+          ? "فعال ✅"
+          : mtStatus === "inactive"
+          ? "غیرفعال ⛔️"
+          : "نامشخص ⚠️";
+      text += `وضعیت سرویس mtproxy: <b>${human}</b>\n`;
+    }
+
+    if (listening && listening.length > 0) {
+      text += `پورت‌های در حال LISTEN:\n<code>${listening}</code>\n`;
+    }
+
+    await bot.sendMessage(chatId, text, {
+      parse_mode: "HTML",
+      ...mainMenuKeyboard(),
     });
-  } else {
-    await bot.sendMessage(chatId, text, { reply_markup: kb.inline_keyboard });
+  } catch (err) {
+    console.error(err);
+    await bot.sendMessage(
+      chatId,
+      `پورت پیش‌فرض فعلی: <code>${defaultPort}</code>\n` +
+        "اما خواندن وضعیت سرویس mtproxy با خطا مواجه شد.",
+      { parse_mode: "HTML", ...mainMenuKeyboard() }
+    );
   }
 }
 
-// 5) Delete proxy by id
-async function handleDeleteProxy(chatId, id, query) {
+// ---- Feature: Delete proxy ----
+
+async function doDeleteProxy(chatId, id) {
   try {
-    const out = await runScriptAsync("delete_proxy.sh", [id]);
-    await bot.answerCallbackQuery(query.id, { text: "Proxy removed." });
-    await bot.sendMessage(
-      chatId,
-      `Proxy removed.\n${out ? String(out) : ""}`
-    );
+    const out = await runScript("delete_proxy.sh", [id]);
+    const trimmed = (out || "").trim();
+
+    if (trimmed.startsWith("DELETED")) {
+      await bot.sendMessage(
+        chatId,
+        `✅ پروکسی با شناسه <code>${id}</code> حذف شد.`,
+        { parse_mode: "HTML", ...mainMenuKeyboard() }
+      );
+    } else if (trimmed.startsWith("NOT_FOUND")) {
+      await bot.sendMessage(
+        chatId,
+        `⚠️ پروکسی با شناسه <code>${id}</code> پیدا نشد.`,
+        { parse_mode: "HTML", ...mainMenuKeyboard() }
+      );
+    } else {
+      await bot.sendMessage(
+        chatId,
+        "❌ حذف پروکسی با خطا مواجه شد. خروجی اسکریپت:\n<code>" +
+          (trimmed || "EMPTY") +
+          "</code>",
+        { parse_mode: "HTML", ...mainMenuKeyboard() }
+      );
+    }
   } catch (err) {
-    await bot.answerCallbackQuery(query.id, { text: "Error deleting proxy" });
+    console.error(err);
     await bot.sendMessage(
       chatId,
-      `Error deleting proxy: ${err.message || "script failed"}`
+      "❌ خطا هنگام اجرای delete_proxy.sh.\n" +
+        "لطفاً روی سرور این دستور را چک کن:\n" +
+        "<code>cd /opt/MTproMonitorbot && ./scripts/delete_proxy.sh " +
+        id +
+        "</code>",
+      { parse_mode: "HTML", ...mainMenuKeyboard() }
     );
   }
 }
+
+console.log("MTPro Monitor Bot is running...");
