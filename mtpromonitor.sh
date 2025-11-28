@@ -17,7 +17,8 @@ RESET='\e[0m'
 INSTALL_DIR="/opt/MTproMonitorbot"
 SERVICE_NAME="mtpromonitorbot"
 
-# ===== Proxy detection config (you can change these if needed) =====
+# ===== Proxy detection config =====
+# You can change these if your stats URL or process name is different
 PROXY_STATS_URL="http://127.0.0.1:8888/stats"
 PROXY_PROCESS_PATTERN="mtproto|mtproxy|mtprotoproxy|mtg|mtgproxy|mtproxy-go"
 
@@ -71,75 +72,10 @@ short_status_header() {
   echo ""
 }
 
-# ===== Detailed system status checker (not in menu, but available) =====
-check_status() {
-  echo -e "${YELLOW}${BOLD}╭───────────────────────────────╮${RESET}"
-  echo -e "${YELLOW}${BOLD}│ ${WHITE}System Status Check${YELLOW}            │${RESET}"
-  echo -e "${YELLOW}${BOLD}╰───────────────────────────────╯${RESET}"
-
-  # Node.js
-  if has_cmd node; then
-    node_ver=$(node -v 2>/dev/null)
-    echo -e " ${WHITE}• Node.js:    ${GREEN}✓ Installed${RESET} ${CYAN}($node_ver)${RESET}  ${YELLOW}~3.8 MB on this system${RESET}"
-  else
-    echo -e " ${WHITE}• Node.js:    ${RED}✗ Not Found${RESET}   ${YELLOW}~3.8 MB if installed (dpkg on this VPS)${RESET}"
-  fi
-
-  # npm
-  if has_cmd npm; then
-    npm_ver=$(npm -v 2>/dev/null)
-    echo -e " ${WHITE}• npm:        ${GREEN}✓ Installed${RESET} ${CYAN}($npm_ver)${RESET}  ${YELLOW}~2.9 MB on this system${RESET}"
-  else
-    echo -e " ${WHITE}• npm:        ${RED}✗ Not Found${RESET}   ${YELLOW}~2.9 MB if installed (dpkg on this VPS)${RESET}"
-  fi`
-
-  # git
-  if has_cmd git; then
-    echo -e " ${WHITE}• git:        ${GREEN}✓ Installed${RESET}  ${YELLOW}~21.2 MB on this system${RESET}"
-  else
-    echo -e " ${WHITE}• git:        ${RED}✗ Not Found${RESET}  ${YELLOW}~21.2 MB if installed (dpkg on this VPS)${RESET}"
-  fi
-
-  # pm2
-  if has_cmd pm2; then
-    echo -e " ${WHITE}• pm2:        ${GREEN}✓ Installed${RESET}  ${YELLOW}~34 MB (global npm)${RESET}"
-  else
-    echo -e " ${WHITE}• pm2:        ${RED}✗ Not Found${RESET}  ${YELLOW}~34 MB if installed (global npm)${RESET}"
-  fi
-
-  # MTProxy process (rough)
-  if pgrep -fi "$PROXY_PROCESS_PATTERN" >/dev/null 2>&1; then
-    echo -e " ${WHITE}• MTProxy:    ${GREEN}✓ Process detected${RESET}  ${YELLOW}(port and binary depend on your setup)${RESET}"
-  else
-    echo -e " ${WHITE}• MTProxy:    ${RED}✗ Not detected${RESET}       ${YELLOW}(optional, but required for full stats)${RESET}"
-  fi
-
-  # Stats endpoint check
-  if has_cmd curl; then
-    if curl -s --max-time 1 "$PROXY_STATS_URL" >/dev/null 2>&1; then
-      echo -e " ${WHITE}• Stats endpoint: ${GREEN}✓ $PROXY_STATS_URL reachable${RESET}"
-    else
-      echo -e " ${WHITE}• Stats endpoint: ${RED}✗ $PROXY_STATS_URL unavailable${RESET}"
-    fi
-  else
-    echo -e " ${WHITE}• curl:       ${RED}✗ Not Found${RESET}  ${YELLOW}~0.5 MB if installed (dpkg on this VPS)${RESET}"
-  fi
-
-  # Bot install dir
-  if [ -d "$INSTALL_DIR" ]; then
-    local size
-    size=$(du -sh "$INSTALL_DIR" 2>/dev/null | awk '{print $1}')
-    echo -e " ${WHITE}• Bot folder: ${GREEN}✓ $INSTALL_DIR${RESET}  ${YELLOW}~$size currently${RESET}"
-  else
-    echo -e " ${WHITE}• Bot folder: ${RED}✗ Not present${RESET} (planned: ${CYAN}$INSTALL_DIR${RESET})"
-  fi
-
-  echo ""
-}
-
 # ===== Install prerequisites via apt (Debian/Ubuntu) =====
 install_prereqs() {
   echo -e "${MAGENTA}${BOLD}Installing prerequisites (Debian/Ubuntu)...${RESET}"
+
   if ! has_cmd apt; then
     echo -e "${RED}apt not found. Please install Node.js, npm, git, curl manually.${RESET}"
     return
@@ -177,10 +113,11 @@ install_prereqs() {
 # ===== Install or update pm2 =====
 install_pm2() {
   echo -e "${MAGENTA}${BOLD}Installing or updating pm2...${RESET}"
+
   if ! has_cmd npm; then
     echo -e "${RED}npm not found. Install Node.js + npm first.${RESET}"
     return
-  fi`
+  fi
 
   if has_cmd pm2; then
     echo -ne "${YELLOW}pm2 is already installed. Reinstall / update it now? [y/N]: ${RESET}"
@@ -413,18 +350,20 @@ prereq_menu() {
     case "$choice" in
       1)
         install_prereqs
+        read -r -p "Press Enter to return to Prerequisites Menu... " _
         ;;
       2)
         install_pm2
+        read -r -p "Press Enter to return to Prerequisites Menu... " _
         ;;
       0)
         break
         ;;
       *)
         echo -e "${RED}Invalid option.${RESET}"
+        sleep 1
         ;;
     esac
-    read -r -p "Press Enter to return to Prerequisites Menu... " _
   done
 }
 
@@ -451,10 +390,11 @@ bot_menu() {
     case "$choice" in
       1)
         install_or_update_bot
+        read -r -p "Press Enter to return to Bot Menu... " _
         ;;
       2)
         # New behavior: if a real token already exists, ask before replacing
-        target_file="$INSTALL_DIR/bot/index.js"
+        local target_file="$INSTALL_DIR/bot/index.js"
         if [ -f "$target_file" ] && grep -q 'const TOKEN = "' "$target_file"; then
           if ! grep -q 'const TOKEN = "TOKEN_HERE"' "$target_file"; then
             echo -e "${YELLOW}Existing bot token detected in bot/index.js.${RESET}"
@@ -470,18 +410,23 @@ bot_menu() {
         if ask_bot_token; then
           set_token_in_index
         fi
+        read -r -p "Press Enter to return to Bot Menu... " _
         ;;
       3)
         start_bot
+        read -r -p "Press Enter to return to Bot Menu... " _
         ;;
       4)
         stop_bot
+        read -r -p "Press Enter to return to Bot Menu... " _
         ;;
       5)
         restart_bot
+        read -r -p "Press Enter to return to Bot Menu... " _
         ;;
       6)
         show_pm2_status
+        read -r -p "Press Enter to return to Bot Menu... " _
         ;;
       7)
         manual_edit_menu
@@ -491,9 +436,9 @@ bot_menu() {
         ;;
       *)
         echo -e "${RED}Invalid option.${RESET}"
+        sleep 1
         ;;
     esac
-    read -r -p "Press Enter to return to Bot Menu... " _
   done
 }
 
@@ -516,6 +461,7 @@ cleanup_menu() {
     case "$choice" in
       1)
         stop_bot
+        read -r -p "Press Enter to return to Cleanup Menu... " _
         ;;
       2)
         echo -ne "${CYAN}Are you sure you want to remove ${WHITE}$INSTALL_DIR${CYAN}? [y/N]: ${RESET}"
@@ -526,6 +472,7 @@ cleanup_menu() {
         else
           echo -e "${YELLOW}Skip removing folder.${RESET}"
         fi
+        read -r -p "Press Enter to return to Cleanup Menu... " _
         ;;
       3)
         if has_cmd npm; then
@@ -535,15 +482,16 @@ cleanup_menu() {
         else
           echo -e "${RED}npm not found. Cannot clear cache.${RESET}"
         fi
+        read -r -p "Press Enter to return to Cleanup Menu... " _
         ;;
       0)
         break
         ;;
       *)
         echo -e "${RED}Invalid option.${RESET}"
+        sleep 1
         ;;
     esac
-    read -r -p "Press Enter to return to Cleanup Menu... " _
   done
 }
 
