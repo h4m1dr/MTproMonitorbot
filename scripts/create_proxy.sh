@@ -2,10 +2,7 @@
 # scripts/create_proxy.sh
 # Create a new MTProxy secret for the official C MTProxy installed by
 # HirbodBehnam/MTProtoProxyInstaller, then restart MTProxy and output
-# connection link information for callers (like the Telegram bot).
-#
-# This script must be run as root (because it edits /etc/systemd/system/MTProxy.service
-# and /opt/MTProxy/objs/bin/mtconfig.conf).
+# connection link information for callers (like the Node.js bot).
 
 set -euo pipefail
 
@@ -27,40 +24,25 @@ fi
 cd "$MT_DIR"
 
 # Load config variables: PORT, CPU_CORES, SECRET_ARY, TAG, CUSTOM_ARGS, TLS_DOMAIN,
-# HAVE_NAT, PUBLIC_IP, PRIVATE_IP, etc. :contentReference[oaicite:3]{index=3}
+# HAVE_NAT, PUBLIC_IP, PRIVATE_IP, etc.
 # shellcheck source=/opt/MTProxy/objs/bin/mtconfig.conf
 source "$MTCFG"
 
-# ---------- resolve PORT ----------
 if [ -z "${PORT:-}" ]; then
   PORT="443"
 fi
 
-# ---------- generate secret ----------
-# If user passes a 32-char hex as first arg, use it; otherwise random.
+# Generate secret (or use provided argument if 32-hex)
 NEW_SECRET=""
 if [ $# -ge 1 ] && [[ "$1" =~ ^[0-9a-fA-F]{32}$ ]]; then
   NEW_SECRET="$(echo "$1" | tr 'A-F' 'a-f')"
 else
-  # same style as installer: 32 hex chars :contentReference[oaicite:4]{index=4}
   NEW_SECRET="$(hexdump -vn "16" -e ' /1 "%02x"' /dev/urandom)"
 fi
 
-# SECRET_ARY is an array of existing secrets; we append new one.
-# Example format in mtconfig.conf:
-# SECRET_ARY=(0000... 1111... 2222...) :contentReference[oaicite:5]{index=5}
 SECRET_ARY+=( "$NEW_SECRET" )
 
-# ---------- rebuild ExecStart arguments (same logic as GenerateService) ----------
-# GenerateService in original script roughly does:
-# ARGS_STR="-u nobody -H $PORT"
-# for i in "${SECRET_ARY[@]}"; do ARGS_STR+=" -S $i"; done
-# [tag]  : -P TAG
-# [tls]  : -D TLS_DOMAIN
-# [nat]  : --nat-info PRIVATE_IP:PUBLIC_IP
-# [cores]: -M (CPU_CORES-1)
-# plus: $CUSTOM_ARGS --aes-pwd proxy-secret proxy-multi.conf :contentReference[oaicite:6]{index=6}
-
+# Rebuild ExecStart (similar to GenerateService in Hirbod script)
 ARGS_STR="-u nobody -H $PORT"
 
 for i in "${SECRET_ARY[@]}"; do
@@ -104,23 +86,16 @@ StartLimitBurst=0
 [Install]
 WantedBy=multi-user.target"
 
-# ---------- write systemd service ----------
 echo "$SERVICE_STR" >"$SERVICE_FILE"
 
-# ---------- restart service ----------
 systemctl daemon-reload
 systemctl restart MTProxy
 
-# ---------- update mtconfig.conf SECRET_ARY line ----------
+# Update SECRET_ARY line in mtconfig.conf
 SECRET_ARY_STR="${SECRET_ARY[*]}"
-# Replace line starting with SECRET_ARY=(...) with new array value
 sed -i "s/^SECRET_ARY=.*/SECRET_ARY=(${SECRET_ARY_STR})/" "$MTCFG"
 
-# ---------- build proxy link ----------
-# For official script, show-connections builds links like:
-#  - Without TLS: secret=dd<SECRET>
-#  - With TLS   : secret=ee<SECRET><hex_domain>  (TLS_DOMAIN hex, lowercase) :contentReference[oaicite:7]{index=7}
-
+# Build proxy link (dd/ee + hex domain if TLS)
 PUBLIC_IP_EFFECTIVE="$PUBLIC_IP"
 if [ -z "$PUBLIC_IP_EFFECTIVE" ] || [ "$PUBLIC_IP_EFFECTIVE" = "YOUR_IP" ]; then
   if command -v curl >/dev/null 2>&1; then
@@ -137,7 +112,6 @@ fi
 
 TG_LINK="tg://proxy?server=${PUBLIC_IP_EFFECTIVE}&port=${PORT}&secret=${SECRET_PARAM}"
 
-# ---------- output for caller (Node.js bot) ----------
 echo "SECRET=$NEW_SECRET"
 echo "PORT=$PORT"
 echo "TG_LINK=$TG_LINK"

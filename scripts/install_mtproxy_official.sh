@@ -1,7 +1,7 @@
 #!/bin/bash
 # scripts/install_mtproxy_official.sh
 # Install official C MTProxy using HirbodBehnam/MTProtoProxyInstaller.
-# This script MUST be run as root on the server.
+# This script MUST be run as root (sudo).
 
 set -euo pipefail
 
@@ -16,9 +16,18 @@ ROOT_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
 echo "=== MTProxy Official Installer (Hirbod) Wrapper ==="
 echo
 
-# Ask basic options (you can hardcode defaults if you want)
-read -r -p "Enter MTProxy port [443]: " PORT
-PORT=${PORT:-443}
+# Optional: read default port from data/default_port if exists
+DEFAULT_PORT_FILE="$ROOT_DIR/data/default_port"
+DEFAULT_PORT="443"
+if [ -f "$DEFAULT_PORT_FILE" ]; then
+  p=$(cat "$DEFAULT_PORT_FILE" 2>/dev/null || echo "")
+  if echo "$p" | grep -Eq '^[0-9]+$'; then
+    DEFAULT_PORT="$p"
+  fi
+fi
+
+read -r -p "Enter MTProxy port [${DEFAULT_PORT}]: " PORT
+PORT=${PORT:-$DEFAULT_PORT}
 
 read -r -p "Enter TLS domain (fake TLS host, empty to disable): " TLS_DOMAIN
 TLS_DOMAIN=${TLS_DOMAIN:-""}
@@ -33,15 +42,10 @@ read -r -p "Press ENTER to start installation using Hirbod script..." _
 cd /opt || exit 2
 
 # Download official installer script from Hirbod repo
-# https://github.com/HirbodBehnam/MTProtoProxyInstaller :contentReference[oaicite:0]{index=0}
 curl -o MTProtoProxyOfficialInstall.sh -L https://git.io/fjo3u
-
 chmod +x MTProtoProxyOfficialInstall.sh
 
-# Build argument list
-ARGS=()
-ARGS+=(--port "$PORT")
-# We let installer generate secrets; later we add new secrets via our own script.
+ARGS=(--port "$PORT")
 if [ -n "$TLS_DOMAIN" ]; then
   ARGS+=(--tls "$TLS_DOMAIN")
 fi

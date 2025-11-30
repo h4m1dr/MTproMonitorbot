@@ -236,6 +236,39 @@ install_pm2() {
   echo -e "${GREEN}pm2 is installed/updated.${RESET}"
 }
 
+install_mtproxy_official_menu() {
+  clear
+  echo -e "${CYAN}${BOLD}MTPro Monitor Bot | MTProxy Install${RESET}"
+  short_status_header
+  echo -e "${MAGENTA}${BOLD}╭───────────────────────────────╮${RESET}"
+  echo -e "${MAGENTA}${BOLD}│ ${WHITE}Install Official MTProxy${MAGENTA}       │${RESET}"
+  echo -e "${MAGENTA}${BOLD}╰───────────────────────────────╯${RESET}"
+  echo ""
+
+  if [ ! -f "$INSTALL_DIR/scripts/install_mtproxy_official.sh" ]; then
+    echo -e "${RED}scripts/install_mtproxy_official.sh not found in repo.${RESET}"
+    echo -e "${YELLOW}Make sure you added it to your project and pushed to GitHub.${RESET}"
+    read -r -p "Press Enter to return to Prerequisites Menu... " _
+    return
+  fi
+
+  echo -e "${CYAN}This will run the official C MTProxy installer by Hirbod (MTProtoProxyInstaller).${RESET}"
+  echo -e "${CYAN}You will be asked for port and (optional) TLS domain inside that script.${RESET}"
+  echo ""
+  read -r -p "Continue and run installer now? [y/N]: " ans
+  ans=${ans:-N}
+  if [[ ! "$ans" =~ ^[Yy]$ ]]; then
+    echo -e "${YELLOW}Cancelled.${RESET}"
+    sleep 1
+    return
+  fi
+
+  sudo bash "$INSTALL_DIR/scripts/install_mtproxy_official.sh"
+  echo -e "${GREEN}MTProxy installer finished (check systemctl status MTProxy).${RESET}"
+  read -r -p "Press Enter to return to Prerequisites Menu... " _
+}
+
+
 # ===== Ask for bot token =====
 ask_bot_token() {
   echo -ne "${CYAN}Enter your Telegram Bot Token: ${RESET}"
@@ -552,6 +585,7 @@ prereq_menu() {
     echo -e "${MAGENTA}${BOLD}╰───────────────────────────────╯${RESET}"
     echo -e " ${CYAN}[1]${RESET} Install / Update base packages (git, curl, nodejs, npm) ${YELLOW}(~28.4 MB disk on this VPS)${RESET}"
     echo -e " ${CYAN}[2]${RESET} Install / Update pm2 ${YELLOW}(~34 MB disk on this VPS)${RESET}"
+    echo -e " ${CYAN}[3]${RESET} Install official MTProxy (Hirbod MTProtoProxyInstaller)"
     echo -e " ${CYAN}[0]${RESET} Back to Main Menu"
     echo ""
     echo -ne "${WHITE}Select an option: ${RESET}"
@@ -565,6 +599,9 @@ prereq_menu() {
         install_pm2
         read -r -p "Press Enter to return to Prerequisites Menu... " _
         ;;
+      3)
+        install_mtproxy_official_menu
+        ;;
       0)
         break
         ;;
@@ -575,6 +612,7 @@ prereq_menu() {
     esac
   done
 }
+
 
 # ===== Bot menu =====
 bot_menu() {

@@ -1,6 +1,6 @@
 #!/bin/bash
 # scripts/new_proxy.sh
-# Create a new MTProxy proxy entry by calling create_proxy.sh
+# Create a new MTProto proxy entry by calling create_proxy.sh
 # (which adds a secret to official MTProxy and restarts service),
 # then store metadata in data/proxies.txt.
 #
@@ -16,8 +16,6 @@ PROXY_DB_FILE="$DATA_DIR/proxies.txt"
 
 mkdir -p "$DATA_DIR"
 
-# Optional: port as first argument (not actually needed with official script,
-# but kept for compatibility; forwarded to create_proxy.sh if given).
 PORT_ARG=""
 if [ $# -ge 1 ] && [[ "$1" =~ ^[0-9]+$ ]]; then
   PORT_ARG="$1"
@@ -30,7 +28,6 @@ if [ ! -x "$CREATE_SCRIPT" ]; then
   exit 1
 fi
 
-# 1) Call create_proxy.sh (must be root, or script itself will fail)
 OUTPUT="$("$CREATE_SCRIPT" $PORT_ARG)"
 
 SECRET=""
@@ -58,7 +55,6 @@ if [ -z "$SECRET" ] || [ -z "$PORT" ] || [ -z "$TG_LINK" ]; then
   exit 1
 fi
 
-# 2) Determine new ID (incremental)
 NEW_ID=1
 if [ -f "$PROXY_DB_FILE" ]; then
   LAST_LINE="$(grep -v '^[[:space:]]*$' "$PROXY_DB_FILE" | tail -n 1 || true)"
@@ -70,11 +66,8 @@ if [ -f "$PROXY_DB_FILE" ]; then
   fi
 fi
 
-# 3) Decide name (later you can change to hproxy 1 / zproxy 1, etc.)
 NAME="proxy-$NEW_ID"
 
-# 4) Append record to proxies.txt => ID SECRET PORT NAME TG_LINK
 echo "$NEW_ID $SECRET $PORT $NAME $TG_LINK" >>"$PROXY_DB_FILE"
 
-# 5) Print same line to stdout for the Node.js bot
 echo "$NEW_ID $SECRET $PORT $NAME $TG_LINK"
