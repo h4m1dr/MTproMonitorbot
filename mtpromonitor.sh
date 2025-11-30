@@ -64,41 +64,18 @@ auto_first_run_setup() {
     fi
   fi
 
-  # 1) Make helper shell scripts executable (scripts/*.sh + this script)
+  # Make helper shell scripts executable (scripts/*.sh + this script)
   if [ -d "$ROOT_DIR/scripts" ]; then
     $SUDO_CMD chmod +x "$ROOT_DIR"/scripts/*.sh 2>/dev/null || true
   fi
+
+  # Make this file executable
   $SUDO_CMD chmod +x "$ROOT_DIR/$(basename "$0")" 2>/dev/null || true
 
-  # 2) Check if MTProxy.service exists; if not, offer to run official installer once
-  if command -v systemctl >/dev/null 2>&1; then
-    local MTP_SERVICE_EXISTS=0
-    if systemctl list-unit-files | grep -q "^MTProxy.service"; then
-      MTP_SERVICE_EXISTS=1
-    fi
-
-    if [ "$MTP_SERVICE_EXISTS" -eq 0 ]; then
-      echo -e "${YELLOW}[!] MTProxy.service not found on this server.${RESET}"
-      if [ -f "$ROOT_DIR/scripts/install_mtproxy_official.sh" ]; then
-        echo -e "${CYAN}You can install the official C MTProxy (Hirbod MTProtoProxyInstaller) now.${RESET}"
-        echo -e "${CYAN}If you skip, you can always install it later from:${RESET}"
-        echo -e "  ${WHITE}Main Menu → Prerequisites Menu → Install official MTProxy${RESET}"
-        echo
-        echo -ne "${WHITE}Run official MTProxy installer now? [y/N]: ${RESET}"
-        read -r ANSW
-        ANSW=${ANSW:-N}
-        if [[ "$ANSW" =~ ^[Yy]$ ]]; then
-          $SUDO_CMD bash "$ROOT_DIR/scripts/install_mtproxy_official.sh"
-        fi
-      else
-        echo -e "${YELLOW}scripts/install_mtproxy_official.sh not found in ${ROOT_DIR}/scripts.${RESET}"
-        echo -e "${YELLOW}You can add it to your project later if you want MTProxy auto-install from menu.${RESET}"
-      fi
-    fi
-  fi
-
-  # No exit here; we always continue to main_menu
+  # NO auto-install, NO questions, NO MTProxy checks  
+  # Everything related to installation happens ONLY inside Prerequisites Menu
 }
+
 
 # ===== Helper: find a free port (default first, then random range) =====
 find_free_port() {
@@ -636,6 +613,7 @@ prereq_menu() {
     echo -e " ${CYAN}[1]${RESET} Install / Update base packages (git, curl, nodejs, npm) ${YELLOW}(~28.4 MB disk on this VPS)${RESET}"
     echo -e " ${CYAN}[2]${RESET} Install / Update pm2 ${YELLOW}(~34 MB disk on this VPS)${RESET}"
     echo -e " ${CYAN}[3]${RESET} Install official MTProxy (Hirbod MTProtoProxyInstaller)"
+    echo -e " ${CYAN}[4]${RESET} Install / Update MTPro Monitor Bot"
     echo -e " ${CYAN}[0]${RESET} Back to Main Menu"
     echo ""
     echo -ne "${WHITE}Select an option: ${RESET}"
@@ -652,6 +630,10 @@ prereq_menu() {
       3)
         install_mtproxy_official_menu
         ;;
+      4)
+        install_or_update_bot
+        read -r -p "Press Enter to return to Prerequisites Menu... " _
+        ;;
       0)
         break
         ;;
@@ -664,6 +646,7 @@ prereq_menu() {
 }
 
 
+
 # ===== Bot menu =====
 bot_menu() {
   while true; do
@@ -673,25 +656,20 @@ bot_menu() {
     echo -e "${MAGENTA}${BOLD}╭───────────────────────────────╮${RESET}"
     echo -e "${MAGENTA}${BOLD}│ ${WHITE}Bot Menu${MAGENTA}                     │${RESET}"
     echo -e "${MAGENTA}${BOLD}╰───────────────────────────────╯${RESET}"
-    echo -e " ${CYAN}[1]${RESET} Install / Update MTPro Monitor Bot"
-    echo -e " ${CYAN}[2]${RESET} Set / Change Bot Token"
-    echo -e " ${CYAN}[3]${RESET} Set / Change Default Proxy Port"
-    echo -e " ${CYAN}[4]${RESET} Configure Host / DNS for proxy links"
-    echo -e " ${CYAN}[5]${RESET} Start Bot (pm2)"
-    echo -e " ${CYAN}[6]${RESET} Stop Bot (pm2)"
-    echo -e " ${CYAN}[7]${RESET} Restart Bot (pm2)"
-    echo -e " ${CYAN}[8]${RESET} Show pm2 status"
-    echo -e " ${CYAN}[9]${RESET} Manual Edit (index.js, scripts, usage.json)"
+    echo -e " ${CYAN}[1]${RESET} Set / Change Bot Token"
+    echo -e " ${CYAN}[2]${RESET} Set / Change Default Proxy Port"
+    echo -e " ${CYAN}[3]${RESET} Configure Host / DNS for proxy links"
+    echo -e " ${CYAN}[4]${RESET} Start Bot (pm2)"
+    echo -e " ${CYAN}[5]${RESET} Stop Bot (pm2)"
+    echo -e " ${CYAN}[6]${RESET} Restart Bot (pm2)"
+    echo -e " ${CYAN}[7]${RESET} Show pm2 status"
+    echo -e " ${CYAN}[8]${RESET} Manual Edit (index.js, scripts, usage.json)"
     echo -e " ${CYAN}[0]${RESET} Back to Main Menu"
     echo ""
     echo -ne "${WHITE}Select an option: ${RESET}"
     read -r choice
     case "$choice" in
       1)
-        install_or_update_bot
-        read -r -p "Press Enter to return to Bot Menu... " _
-        ;;
-      2)
         # Token menu with warning if already set
         local_target_file="$INSTALL_DIR/bot/index.js"
         if [ -f "$local_target_file" ] && grep -q 'const TOKEN = "' "$local_target_file"; then
@@ -711,31 +689,31 @@ bot_menu() {
         fi
         read -r -p "Press Enter to return to Bot Menu... " _
         ;;
-      3)
+      2)
         set_default_port_interactive
         read -r -p "Press Enter to return to Bot Menu... " _
         ;;
-      4)
+      3)
         configure_host_dns_interactive
         read -r -p "Press Enter to return to Bot Menu... " _
         ;;
-      5)
+      4)
         start_bot
         read -r -p "Press Enter to return to Bot Menu... " _
         ;;
-      6)
+      5)
         stop_bot
         read -r -p "Press Enter to return to Bot Menu... " _
         ;;
-      7)
+      6)
         restart_bot
         read -r -p "Press Enter to return to Bot Menu... " _
         ;;
-      8)
+      7)
         show_pm2_status
         read -r -p "Press Enter to return to Bot Menu... " _
         ;;
-      9)
+      8)
         manual_edit_menu
         ;;
       0)
@@ -748,6 +726,7 @@ bot_menu() {
     esac
   done
 }
+
 
 # ===== Cleanup menu =====
 cleanup_menu() {
