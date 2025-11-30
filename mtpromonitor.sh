@@ -18,6 +18,58 @@ INSTALL_DIR="/opt/MTproMonitorbot"
 SERVICE_NAME="mtpromonitorbot"
 CONFIG_PATH="$INSTALL_DIR/data/config.json"
 
+
+# ===== Helper: detect if MTProxy and bot are installed =====
+is_mtproxy_installed() {
+  # Check for systemd service or mtconfig.conf from official installer
+  if command -v systemctl >/dev/null 2>&1; then
+    if systemctl list-unit-files 2>/dev/null | grep -q "^MTProxy.service"; then
+      return 0
+    fi
+  fi
+  if [ -f "/opt/MTProxy/objs/bin/mtconfig.conf" ]; then
+    return 0
+  fi
+  return 1
+}
+
+is_bot_installed() {
+  if [ -d "$INSTALL_DIR" ] && [ -f "$INSTALL_DIR/bot/index.js" ]; then
+    return 0
+  fi
+  return 1
+}
+
+is_full_stack_installed() {
+  is_mtproxy_installed && is_bot_installed
+}
+
+# Sync bot default_port from official MTProxy config
+sync_default_port_from_mtconfig() {
+  local cfg="/opt/MTProxy/objs/bin/mtconfig.conf"
+  local data_dir="$INSTALL_DIR/data"
+  local default_port_file="$data_dir/default_port"
+
+  if [ ! -f "$cfg" ]; then
+    echo -e "${YELLOW}MTProxy config file not found (${cfg}). Skipping default port sync.${RESET}"
+    return
+  fi
+
+  local mt_port
+  mt_port="$(grep '^PORT=' "$cfg" | head -n1 | cut -d'=' -f2 | tr -d '[:space:]')"
+
+  if ! echo "$mt_port" | grep -Eq '^[0-9]+$'; then
+    echo -e "${YELLOW}Could not detect PORT=... in ${cfg}. Skipping default port sync.${RESET}"
+    return
+  fi
+
+  mkdir -p "$data_dir"
+  echo "$mt_port" > "$default_port_file"
+  echo -e "${GREEN}Synced bot default proxy port with MTProxy PORT:${RESET} ${WHITE}$mt_port${RESET}"
+}
+
+
+
 # ===== Proxy detection config =====
 # Change these if your stats URL or process name is different
 PROXY_STATS_URL="http://127.0.0.1:8888/stats"
@@ -489,14 +541,67 @@ install_or_update_bot() {
     fi
   fi
 
-  set_default_port_interactive
-
+  # Do NOT ask for default port here; it will be synced from MTProxy or changed from Bot Menu.
   if [ -d "$INSTALL_DIR/scripts" ]; then
     chmod +x "$INSTALL_DIR"/scripts/*.sh 2>/dev/null
   fi
 
   echo -e "${GREEN}Bot install/update process finished.${RESET}"
 }
+
+# ===== Full install: MTProxy (official) + Bot in one flow =====
+full_install_mtproxy_and_bot() {
+  clear
+  echo -e "${CYAN}${BOLD}MTPro Monitor Bot | Full Install${RESET}"
+  short_status_header
+  echo -e "${MAGENTA}${BOLD}╭───────────────────────────────╮${RESET}"
+  echo -e "${MAGENTA}${BOLD}│ ${WHITE}Full Install (MTProxy + Bot)${MAGENTA} │${RESET}"
+  echo -e "${MAGENTA}${BOLD}╰───────────────────────────────╯${RESET}"
+  echo ""
+
+  if is_full_stack_installed; then
+    echo -e "${GREEN}It looks like MTProxy + Bot are already installed.${RESET}"
+    echo -ne "${CYAN}Re-run full installation (MTProxy + Bot)? [y/N]: ${RESET}"
+    read -r ans
+    ans=${ans:-N}
+    if [[ ! "$ans" =~ ^[Yy]$ ]]; then
+      echo -e "${YELLOW}Skipping full reinstall.${RESET}"
+      read -r -p "Press Enter to return to Prerequisites Menu... " _
+      return
+    fi
+  fi
+
+  echo -e "${CYAN}Step 1/3: Install / update official MTProxy (Hirbod installer).${RESET}"
+  echo -e "${CYAN}You will be asked for PORT and (optional) domain inside that script.${RESET}"
+  echo ""
+
+  if [ ! -f "$INSTALL_DIR/scripts/install_mtproxy_official.sh" ]; then
+    echo -e "${RED}$INSTALL_DIR/scripts/install_mtproxy_official.sh not found.${RESET}"
+    echo -e "${YELLOW}Make sure the installer script exists in the repo.${RESET}"
+    read -r -p "Press Enter to return to Prerequisites Menu... " _
+    return
+  fi
+
+  sudo bash "$INSTALL_DIR/scripts/install_mtproxy_official.sh"
+
+  echo ""
+  echo -e "${GREEN}MTProxy installer finished. Syncing PORT with bot default_port...${RESET}"
+  sync_default_port_from_mtconfig
+
+  echo ""
+  echo -e "${CYAN}Step 2/3: Install / update MTPro Monitor Bot.${RESET}"
+  install_or_update_bot
+
+  echo ""
+  echo -e "${CYAN}Step 3/3: Final sync of default_port from MTProxy (safety).${RESET}"
+  sync_default_port_from_mtconfig
+
+  echo ""
+  echo -e "${GREEN}Full installation (MTProxy + Bot) is complete.${RESET}"
+  read -r -p "Press Enter to return to Prerequisites Menu... " _
+}
+
+
 
 # ===== Start bot with pm2 =====
 start_bot() {
@@ -612,8 +717,7 @@ prereq_menu() {
     echo -e "${MAGENTA}${BOLD}╰───────────────────────────────╯${RESET}"
     echo -e " ${CYAN}[1]${RESET} Install / Update base packages (git, curl, nodejs, npm) ${YELLOW}(~28.4 MB disk on this VPS)${RESET}"
     echo -e " ${CYAN}[2]${RESET} Install / Update pm2 ${YELLOW}(~34 MB disk on this VPS)${RESET}"
-    echo -e " ${CYAN}[3]${RESET} Install official MTProxy (Hirbod MTProtoProxyInstaller)"
-    echo -e " ${CYAN}[4]${RESET} Install / Update MTPro Monitor Bot"
+    echo -e " ${CYAN}[3]${RESET} Full Install: official MTProxy + MTPro Monitor Bot"
     echo -e " ${CYAN}[0]${RESET} Back to Main Menu"
     echo ""
     echo -ne "${WHITE}Select an option: ${RESET}"
@@ -628,11 +732,7 @@ prereq_menu() {
         read -r -p "Press Enter to return to Prerequisites Menu... " _
         ;;
       3)
-        install_mtproxy_official_menu
-        ;;
-      4)
-        install_or_update_bot
-        read -r -p "Press Enter to return to Prerequisites Menu... " _
+        full_install_mtproxy_and_bot
         ;;
       0)
         break
@@ -644,6 +744,7 @@ prereq_menu() {
     esac
   done
 }
+
 
 
 
@@ -798,8 +899,8 @@ main_menu() {
     echo -e "${MAGENTA}${BOLD}╭───────────────────────────────╮${RESET}"
     echo -e "${MAGENTA}${BOLD}│ ${WHITE}Main Menu${MAGENTA}                     │${RESET}"
     echo -e "${MAGENTA}${BOLD}╰───────────────────────────────╯${RESET}"
-    echo -e " ${CYAN}[1]${RESET} Prerequisites Menu (install base packages, pm2)"
-    echo -e " ${CYAN}[2]${RESET} Bot Menu (install, token, port, host/DNS, pm2 control, manual edit)"
+    echo -e " ${CYAN}[1]${RESET} Prerequisites Menu (install base packages, pm2, full install)"
+    echo -e " ${CYAN}[2]${RESET} Bot Menu (token, port, host/DNS, pm2 control, manual edit)"
     echo -e " ${CYAN}[3]${RESET} Cleanup Menu (stop, remove, clean cache)"
     echo -e " ${CYAN}[0]${RESET} Exit"
     echo ""
@@ -810,10 +911,22 @@ main_menu() {
         prereq_menu
         ;;
       2)
-        bot_menu
+        if ! is_full_stack_installed; then
+          echo -e "${RED}Full installation has not been completed yet.${RESET}"
+          echo -e "${CYAN}Go to Prerequisites Menu → [3] Full Install (MTProxy + Bot) first.${RESET}"
+          read -r -p "Press Enter to return to Main Menu... " _
+        else
+          bot_menu
+        fi
         ;;
       3)
-        cleanup_menu
+        if ! is_full_stack_installed; then
+          echo -e "${RED}Full installation has not been completed yet.${RESET}"
+          echo -e "${CYAN}Go to Prerequisites Menu → [3] Full Install (MTProxy + Bot) first.${RESET}"
+          read -r -p "Press Enter to return to Main Menu... " _
+        else
+          cleanup_menu
+        fi
         ;;
       0)
         echo -e "${GREEN}Bye.${RESET}"
