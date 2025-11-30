@@ -50,6 +50,56 @@ is_port_free() {
   return 0  # free (or cannot detect, assume free)
 }
 
+# ===== Auto first-run setup (replaces old setup.sh) =====
+auto_first_run_setup() {
+  # Detect script root directory (where mtpromonitor.sh is located)
+  local ROOT_DIR
+  ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+
+  # Prepare sudo if not running as root
+  local SUDO_CMD=""
+  if [ "$EUID" -ne 0 ]; then
+    if command -v sudo >/dev/null 2>&1; then
+      SUDO_CMD="sudo"
+    fi
+  fi
+
+  # 1) Make helper shell scripts executable (scripts/*.sh + this script)
+  if [ -d "$ROOT_DIR/scripts" ]; then
+    $SUDO_CMD chmod +x "$ROOT_DIR"/scripts/*.sh 2>/dev/null || true
+  fi
+  $SUDO_CMD chmod +x "$ROOT_DIR/$(basename "$0")" 2>/dev/null || true
+
+  # 2) Check if MTProxy.service exists; if not, offer to run official installer once
+  if command -v systemctl >/dev/null 2>&1; then
+    local MTP_SERVICE_EXISTS=0
+    if systemctl list-unit-files | grep -q "^MTProxy.service"; then
+      MTP_SERVICE_EXISTS=1
+    fi
+
+    if [ "$MTP_SERVICE_EXISTS" -eq 0 ]; then
+      echo -e "${YELLOW}[!] MTProxy.service not found on this server.${RESET}"
+      if [ -f "$ROOT_DIR/scripts/install_mtproxy_official.sh" ]; then
+        echo -e "${CYAN}You can install the official C MTProxy (Hirbod MTProtoProxyInstaller) now.${RESET}"
+        echo -e "${CYAN}If you skip, you can always install it later from:${RESET}"
+        echo -e "  ${WHITE}Main Menu → Prerequisites Menu → Install official MTProxy${RESET}"
+        echo
+        echo -ne "${WHITE}Run official MTProxy installer now? [y/N]: ${RESET}"
+        read -r ANSW
+        ANSW=${ANSW:-N}
+        if [[ "$ANSW" =~ ^[Yy]$ ]]; then
+          $SUDO_CMD bash "$ROOT_DIR/scripts/install_mtproxy_official.sh"
+        fi
+      else
+        echo -e "${YELLOW}scripts/install_mtproxy_official.sh not found in ${ROOT_DIR}/scripts.${RESET}"
+        echo -e "${YELLOW}You can add it to your project later if you want MTProxy auto-install from menu.${RESET}"
+      fi
+    fi
+  fi
+
+  # No exit here; we always continue to main_menu
+}
+
 # ===== Helper: find a free port (default first, then random range) =====
 find_free_port() {
   local DEFAULT_PORT="$1"
@@ -799,4 +849,5 @@ main_menu() {
 }
 
 # ===== Start script =====
+auto_first_run_setup
 main_menu

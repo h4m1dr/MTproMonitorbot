@@ -1,13 +1,16 @@
 #!/bin/bash
 # scripts/create_proxy.sh
-# Create a new MTProxy secret for the official C MTProxy installed by
-# HirbodBehnam/MTProtoProxyInstaller, then restart MTProxy and output
-# connection link information for callers (like the Node.js bot).
+# Add a new MTProto secret to official C MTProxy (Hirbod MTProtoProxyInstaller)
+# and print connection info for callers (bot, etc.).
+# Output:
+#   SECRET=<hex_secret>
+#   PORT=<port>
+#   TG_LINK=<tg://proxy?...>
 
 set -euo pipefail
 
 if [ "$(id -u)" -ne 0 ]; then
-  echo "Error: Please run this script as root (sudo)." >&2
+  echo "Error: please run this script as root (sudo)." >&2
   exit 1
 fi
 
@@ -15,64 +18,55 @@ MT_DIR="/opt/MTProxy/objs/bin"
 SERVICE_FILE="/etc/systemd/system/MTProxy.service"
 MTCFG="$MT_DIR/mtconfig.conf"
 
-if [ ! -f "$MTCFG" ]; then
-  echo "Error: mtconfig.conf not found at $MTCFG" >&2
-  echo "Make sure you have installed MTProxy using MTProtoProxyOfficialInstall.sh" >&2
+if [ ! -d "$MT_DIR" ] || [ ! -f "$MTCFG" ]; then
+  echo "Error: MTProxy does not seem to be installed via Hirbod's installer." >&2
+  echo "Expected directory: $MT_DIR" >&2
+  echo "Expected config   : $MTCFG" >&2
   exit 1
 fi
 
-cd "$MT_DIR"
+if [ ! -f "$SERVICE_FILE" ]; then
+  echo "Error: $SERVICE_FILE not found. Did you finish the installation?" >&2
+  exit 1
+fi
 
-# Load config variables: PORT, CPU_CORES, SECRET_ARY, TAG, CUSTOM_ARGS, TLS_DOMAIN,
-# HAVE_NAT, PUBLIC_IP, PRIVATE_IP, etc.
-# shellcheck source=/opt/MTProxy/objs/bin/mtconfig.conf
+# Load current MTProxy config (PORT, CPU_CORES, SECRET_ARY, TAG, CUSTOM_ARGS, TLS_DOMAIN, HAVE_NAT, PUBLIC_IP, PRIVATE_IP)
+# shellcheck disable=SC1090
 source "$MTCFG"
 
-if [ -z "${PORT:-}" ]; then
-  PORT="443"
-fi
+# Function copied from HirbodBehnam/MTProtoProxyInstaller (GenerateService)
+GenerateService() {
+  local ARGS_STR
+  ARGS_STR="-u nobody -H $PORT"
 
-# Generate secret (or use provided argument if 32-hex)
-NEW_SECRET=""
-if [ $# -ge 1 ] && [[ "$1" =~ ^[0-9a-fA-F]{32}$ ]]; then
-  NEW_SECRET="$(echo "$1" | tr 'A-F' 'a-f')"
-else
-  NEW_SECRET="$(hexdump -vn "16" -e ' /1 "%02x"' /dev/urandom)"
-fi
+  # Add all secrets as -S <secret>
+  for i in "${SECRET_ARY[@]}"; do
+    ARGS_STR+=" -S $i"
+  done
 
-SECRET_ARY+=( "$NEW_SECRET" )
+  # Optional advertising tag
+  if [ -n "${TAG:-}" ]; then
+    ARGS_STR+=" -P $TAG "
+  fi
 
-# Rebuild ExecStart (similar to GenerateService in Hirbod script)
-ARGS_STR="-u nobody -H $PORT"
+  # Optional Fake-TLS domain
+  if [ -n "${TLS_DOMAIN:-}" ]; then
+    ARGS_STR+=" -D $TLS_DOMAIN "
+  fi
 
-for i in "${SECRET_ARY[@]}"; do
-  ARGS_STR+=" -S $i"
-done
+  # NAT info
+  if [ "${HAVE_NAT:-n}" = "y" ]; then
+    ARGS_STR+=" --nat-info $PRIVATE_IP:$PUBLIC_IP "
+  fi
 
-if [ -n "${TAG:-}" ]; then
-  ARGS_STR+=" -P $TAG"
-fi
+  # Worker count
+  local NEW_CORE
+  NEW_CORE=$((CPU_CORES - 1))
+  ARGS_STR+=" -M $NEW_CORE ${CUSTOM_ARGS:-} --aes-pwd proxy-secret proxy-multi.conf"
 
-if [ -n "${TLS_DOMAIN:-}" ]; then
-  ARGS_STR+=" -D $TLS_DOMAIN"
-fi
-
-if [ "${HAVE_NAT:-n}" = "y" ]; then
-  ARGS_STR+=" --nat-info $PRIVATE_IP:$PUBLIC_IP"
-fi
-
-if [ -z "${CPU_CORES:-}" ]; then
-  CPU_CORES="$(nproc --all || echo 2)"
-fi
-
-NEW_CORE=$((CPU_CORES - 1))
-if [ "$NEW_CORE" -lt 1 ]; then
-  NEW_CORE=1
-fi
-
-ARGS_STR+=" -M $NEW_CORE ${CUSTOM_ARGS:-} --aes-pwd proxy-secret proxy-multi.conf"
-
-SERVICE_STR="[Unit]
+  # Final systemd service unit
+  read -r -d '' SERVICE_STR <<EOF || true
+[Unit]
 Description=MTProxy
 After=network.target
 
@@ -84,33 +78,52 @@ Restart=on-failure
 StartLimitBurst=0
 
 [Install]
-WantedBy=multi-user.target"
+WantedBy=multi-user.target
+EOF
+}
 
-echo "$SERVICE_STR" >"$SERVICE_FILE"
+# Create a new random 32-hex secret
+NEW_SECRET="$(hexdump -vn '16' -e ' /1 "%02x"' /dev/urandom)"
+NEW_SECRET="${NEW_SECRET,,}"  # force lowercase
 
+# Append to SECRET_ARY
+SECRET_ARY+=("$NEW_SECRET")
+
+# Rebuild systemd service file and restart MTProxy
+GenerateService
+
+cd /etc/systemd/system || exit 2
+systemctl stop MTProxy || true
+printf '%s\n' "$SERVICE_STR" > "$SERVICE_FILE"
 systemctl daemon-reload
-systemctl restart MTProxy
+systemctl start MTProxy
+systemctl is-active --quiet MTProxy || {
+  echo "Warning: MTProxy service is not active after restart. Please check 'systemctl status MTProxy'." >&2
+}
 
-# Update SECRET_ARY line in mtconfig.conf
+# Update mtconfig.conf SECRET_ARY line
+cd "$MT_DIR" || exit 2
 SECRET_ARY_STR="${SECRET_ARY[*]}"
-sed -i "s/^SECRET_ARY=.*/SECRET_ARY=(${SECRET_ARY_STR})/" "$MTCFG"
+# Replace existing SECRET_ARY assignment
+sed -i "s/^SECRET_ARY=.*/SECRET_ARY=($SECRET_ARY_STR)/" "$MTCFG"
 
-# Build proxy link (dd/ee + hex domain if TLS)
-PUBLIC_IP_EFFECTIVE="$PUBLIC_IP"
-if [ -z "$PUBLIC_IP_EFFECTIVE" ] || [ "$PUBLIC_IP_EFFECTIVE" = "YOUR_IP" ]; then
-  if command -v curl >/dev/null 2>&1; then
-    PUBLIC_IP_EFFECTIVE="$(curl -sS https://api.ipify.org || echo "YOUR_IP")"
-  fi
+# Make sure we have PUBLIC_IP for link generation
+if [ -z "${PUBLIC_IP:-}" ] || [ "$PUBLIC_IP" = "YOUR_IP" ]; then
+  PUBLIC_IP="$(curl -fsS https://api.ipify.org || echo 'YOUR_IP')"
 fi
 
+# Build Telegram link (supports Fake-TLS)
+SERVER_FIELD="$PUBLIC_IP"
+# If you want to always use TLS_DOMAIN in server field, you can change this later.
+
 if [ -n "${TLS_DOMAIN:-}" ]; then
-  HEX_DOMAIN=$(printf "%s" "$TLS_DOMAIN" | xxd -pu | tr 'A-F' 'a-f')
+  HEX_DOMAIN="$(printf '%s' "$TLS_DOMAIN" | xxd -pu | tr 'A-F' 'a-f')"
   SECRET_PARAM="ee${NEW_SECRET}${HEX_DOMAIN}"
 else
   SECRET_PARAM="dd${NEW_SECRET}"
 fi
 
-TG_LINK="tg://proxy?server=${PUBLIC_IP_EFFECTIVE}&port=${PORT}&secret=${SECRET_PARAM}"
+TG_LINK="tg://proxy?server=${SERVER_FIELD}&port=${PORT}&secret=${SECRET_PARAM}"
 
 echo "SECRET=$NEW_SECRET"
 echo "PORT=$PORT"

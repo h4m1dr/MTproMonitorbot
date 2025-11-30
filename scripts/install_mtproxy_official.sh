@@ -1,68 +1,78 @@
 #!/bin/bash
 # scripts/install_mtproxy_official.sh
-# Install official C MTProxy using HirbodBehnam/MTProtoProxyInstaller.
-# This script MUST be run as root (sudo).
+# Wrapper around HirbodBehnam/MTProtoProxyInstaller (official C MTProxy).
+# - Downloads MTProtoProxyOfficialInstall.sh if missing
+# - Runs it (interactive)
+# - Shows MTProxy systemd status
 
 set -euo pipefail
 
 if [ "$(id -u)" -ne 0 ]; then
-  echo "Please run this script as root (sudo bash scripts/install_mtproxy_official.sh)"
+  echo "Please run this script as root (for example: sudo bash scripts/install_mtproxy_official.sh)" >&2
   exit 1
 fi
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-ROOT_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
+cd "$SCRIPT_DIR"
 
-echo "=== MTProxy Official Installer (Hirbod) Wrapper ==="
+echo "=== MTProxy official installer wrapper ==="
 echo
 
-# Optional: read default port from data/default_port if exists
-DEFAULT_PORT_FILE="$ROOT_DIR/data/default_port"
-DEFAULT_PORT="443"
-if [ -f "$DEFAULT_PORT_FILE" ]; then
-  p=$(cat "$DEFAULT_PORT_FILE" 2>/dev/null || echo "")
-  if echo "$p" | grep -Eq '^[0-9]+$'; then
-    DEFAULT_PORT="$p"
+# Ensure curl is available
+if ! command -v curl >/dev/null 2>&1; then
+  echo "[*] Installing curl (required to download installer)..."
+  if command -v apt-get >/dev/null 2>&1; then
+    apt-get update -y
+    apt-get install -y curl
+  elif command -v yum >/dev/null 2>&1; then
+    yum install -y curl
+  else
+    echo "Error: could not install curl (no apt-get/yum found)." >&2
+    exit 1
   fi
 fi
 
-read -r -p "Enter MTProxy port [${DEFAULT_PORT}]: " PORT
-PORT=${PORT:-$DEFAULT_PORT}
+WORK_DIR="/opt/MTProtoProxyInstaller"
+mkdir -p "$WORK_DIR"
+cd "$WORK_DIR"
 
-read -r -p "Enter TLS domain (fake TLS host, empty to disable): " TLS_DOMAIN
-TLS_DOMAIN=${TLS_DOMAIN:-""}
-
-echo
-echo "Port      : $PORT"
-echo "TLS domain: ${TLS_DOMAIN:-<none>}"
-echo
-
-read -r -p "Press ENTER to start installation using Hirbod script..." _
-
-cd /opt || exit 2
-
-# Download official installer script from Hirbod repo
-curl -o MTProtoProxyOfficialInstall.sh -L https://git.io/fjo3u
-chmod +x MTProtoProxyOfficialInstall.sh
-
-ARGS=(--port "$PORT")
-if [ -n "$TLS_DOMAIN" ]; then
-  ARGS+=(--tls "$TLS_DOMAIN")
+if [ ! -f MTProtoProxyOfficialInstall.sh ]; then
+  echo "[*] Downloading MTProtoProxyOfficialInstall.sh from GitHub (HirbodBehnam/MTProtoProxyInstaller)..."
+  curl -fsSL -o MTProtoProxyOfficialInstall.sh \
+    "https://raw.githubusercontent.com/HirbodBehnam/MTProtoProxyInstaller/master/MTProtoProxyOfficialInstall.sh"
+  chmod +x MTProtoProxyOfficialInstall.sh
+else
+  echo "[*] Using existing MTProtoProxyOfficialInstall.sh in $WORK_DIR"
 fi
 
 echo
-echo "Running: bash MTProtoProxyOfficialInstall.sh ${ARGS[*]}"
+echo ">>> The next step is the ORIGINAL interactive installer."
+echo ">>> Follow the prompts to choose port, secret, TAG, etc."
 echo
 
-bash MTProtoProxyOfficialInstall.sh "${ARGS[@]}"
+bash MTProtoProxyOfficialInstall.sh
 
 echo
-echo "If everything went fine, MTProxy service name should be: MTProxy"
-echo "Service file: /etc/systemd/system/MTProxy.service"
-echo "Config file : /opt/MTProxy/objs/bin/mtconfig.conf"
-echo
+echo "=== Post-install check ==="
+if [ -f /etc/systemd/system/MTProxy.service ]; then
+  echo "[*] MTProxy.service found."
+  systemctl daemon-reload
+  systemctl enable MTProxy || true
+  systemctl restart MTProxy || true
+  echo
+  systemctl --no-pager --full status MTProxy || true
+else
+  echo "WARNING: /etc/systemd/system/MTProxy.service not found." >&2
+  echo "Maybe the installer did not finish successfully." >&2
+fi
 
-systemctl status MTProxy --no-pager || true
+echo
+echo "Expected binary/config path: /opt/MTProxy/objs/bin"
+if [ -d /opt/MTProxy/objs/bin ]; then
+  ls -l /opt/MTProxy/objs/bin
+else
+  echo "Directory /opt/MTProxy/objs/bin does not exist."
+fi
 
 echo
-echo "=== MTProxy official installation finished ==="
+echo "=== MTProxy official installation wrapper finished ==="
