@@ -353,35 +353,32 @@ install_pm2() {
 
 install_mtproxy_official_menu() {
   clear
-  echo -e "${CYAN}${BOLD}MTPro Monitor Bot | MTProxy Install${RESET}"
+  echo -e "${CYAN}${BOLD}MTPro Monitor Bot | MTProxy Menu${RESET}"
   short_status_header
   echo -e "${MAGENTA}${BOLD}╭───────────────────────────────╮${RESET}"
-  echo -e "${MAGENTA}${BOLD}│ ${WHITE}Install Official MTProxy${MAGENTA}       │${RESET}"
+  echo -e "${MAGENTA}${BOLD}│ ${WHITE}Run Official MTProxy Menu${MAGENTA}   │${RESET}"
   echo -e "${MAGENTA}${BOLD}╰───────────────────────────────╯${RESET}"
   echo ""
 
   if [ ! -f "$INSTALL_DIR/scripts/install_mtproxy_official.sh" ]; then
-    echo -e "${RED}scripts/install_mtproxy_official.sh not found in repo.${RESET}"
+    echo -e "${RED}$INSTALL_DIR/scripts/install_mtproxy_official.sh not found in repo.${RESET}"
     echo -e "${YELLOW}Make sure you added it to your project and pushed to GitHub.${RESET}"
-    read -r -p "Press Enter to return to Prerequisites Menu... " _
+    read -r -p "Press Enter to return to Main Menu... " _
     return
   fi
 
-  echo -e "${CYAN}This will run the official C MTProxy installer by Hirbod (MTProtoProxyInstaller).${RESET}"
-  echo -e "${CYAN}You will be asked for port and (optional) TLS domain inside that script.${RESET}"
+  echo -e "${CYAN}Opening original MTProxy installer/menu by Hirbod (MTProtoProxyInstaller)...${RESET}"
+  echo -e "${CYAN}From here, you can use all options of his script (reinstall, change config, uninstall, etc.).${RESET}"
   echo ""
-  read -r -p "Continue and run installer now? [y/N]: " ans
-  ans=${ans:-N}
-  if [[ ! "$ans" =~ ^[Yy]$ ]]; then
-    echo -e "${YELLOW}Cancelled.${RESET}"
-    sleep 1
-    return
-  fi
 
+  # Directly run the installer script (shows Hirbod's own menu, no extra question)
   sudo bash "$INSTALL_DIR/scripts/install_mtproxy_official.sh"
-  echo -e "${GREEN}MTProxy installer finished (check systemctl status MTProxy).${RESET}"
-  read -r -p "Press Enter to return to Prerequisites Menu... " _
+
+  echo ""
+  echo -e "${GREEN}Returned from Hirbod MTProxy installer/menu.${RESET}"
+  read -r -p "Press Enter to return to Main Menu... " _
 }
+
 
 
 # ===== Ask for bot token =====
