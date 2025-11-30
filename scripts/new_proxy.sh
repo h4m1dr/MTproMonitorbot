@@ -1,11 +1,11 @@
 #!/bin/bash
 # scripts/new_proxy.sh
-# Create a new MTProto proxy entry and actually register the secret
-# via create_proxy.sh. This script:
-#   1. Calls create_proxy.sh (which appends to /etc/mtproxy/secret.list
-#      and restarts mtproxy service)
-#   2. Stores proxy metadata in data/proxies.txt
-#   3. Prints: ID SECRET PORT NAME TG_LINK
+# Create a new MTProxy proxy entry by calling create_proxy.sh
+# (which adds a secret to official MTProxy and restarts service),
+# then store metadata in data/proxies.txt.
+#
+# Output format (single line):
+#   ID SECRET PORT NAME TG_LINK
 
 set -euo pipefail
 
@@ -15,54 +15,66 @@ DATA_DIR="$ROOT_DIR/data"
 PROXY_DB_FILE="$DATA_DIR/proxies.txt"
 
 mkdir -p "$DATA_DIR"
-touch "$PROXY_DB_FILE"
 
-# Call create_proxy.sh and capture its output
+# Optional: port as first argument (not actually needed with official script,
+# but kept for compatibility; forwarded to create_proxy.sh if given).
+PORT_ARG=""
+if [ $# -ge 1 ] && [[ "$1" =~ ^[0-9]+$ ]]; then
+  PORT_ARG="$1"
+fi
+
 CREATE_SCRIPT="$SCRIPT_DIR/create_proxy.sh"
+
 if [ ! -x "$CREATE_SCRIPT" ]; then
-  echo "ERROR: create_proxy.sh is not executable or not found at $CREATE_SCRIPT" >&2
+  echo "ERROR: create_proxy.sh is not executable or missing at $CREATE_SCRIPT" >&2
   exit 1
 fi
 
-CREATE_OUT=""
-if [ "${1-}" != "" ]; then
-  # Optional port argument
-  CREATE_OUT="$("$CREATE_SCRIPT" "$1")"
-else
-  CREATE_OUT="$("$CREATE_SCRIPT")"
-fi
+# 1) Call create_proxy.sh (must be root, or script itself will fail)
+OUTPUT="$("$CREATE_SCRIPT" $PORT_ARG)"
 
-# Parse SECRET, PORT, TG_LINK from create_proxy.sh output
-SECRET="$(echo "$CREATE_OUT" | sed -n 's/^SECRET=//p' | head -n 1)"
-PORT="$(echo "$CREATE_OUT" | sed -n 's/^PORT=//p' | head -n 1)"
-TG_LINK="$(echo "$CREATE_OUT" | sed -n 's/^TG_LINK=//p' | head -n 1)"
+SECRET=""
+PORT=""
+TG_LINK=""
 
-if [ -z "$SECRET" ]; then
-  echo "ERROR: SECRET is empty (create_proxy.sh output was: $CREATE_OUT)" >&2
+while IFS= read -r line; do
+  case "$line" in
+    SECRET=*)
+      SECRET="${line#SECRET=}"
+      ;;
+    PORT=*)
+      PORT="${line#PORT=}"
+      ;;
+    TG_LINK=*)
+      TG_LINK="${line#TG_LINK=}"
+      ;;
+  esac
+done <<< "$OUTPUT"
+
+if [ -z "$SECRET" ] || [ -z "$PORT" ] || [ -z "$TG_LINK" ]; then
+  echo "ERROR: Failed to parse SECRET/PORT/TG_LINK from create_proxy.sh output." >&2
+  echo "Raw output was:" >&2
+  echo "$OUTPUT" >&2
   exit 1
 fi
 
-if [ -z "$PORT" ]; then
-  echo "ERROR: PORT is empty (create_proxy.sh output was: $CREATE_OUT)" >&2
-  exit 1
+# 2) Determine new ID (incremental)
+NEW_ID=1
+if [ -f "$PROXY_DB_FILE" ]; then
+  LAST_LINE="$(grep -v '^[[:space:]]*$' "$PROXY_DB_FILE" | tail -n 1 || true)"
+  if [ -n "$LAST_LINE" ]; then
+    LAST_ID="$(echo "$LAST_LINE" | awk '{print $1}')"
+    if [[ "$LAST_ID" =~ ^[0-9]+$ ]]; then
+      NEW_ID=$((LAST_ID + 1))
+    fi
+  fi
 fi
 
-if ! echo "$PORT" | grep -Eq '^[0-9]+$'; then
-  echo "ERROR: PORT is not numeric: $PORT" >&2
-  exit 1
-fi
+# 3) Decide name (later you can change to hproxy 1 / zproxy 1, etc.)
+NAME="proxy-$NEW_ID"
 
-if [ -z "$TG_LINK" ]; then
-  echo "ERROR: TG_LINK is empty (create_proxy.sh output was: $CREATE_OUT)" >&2
-  exit 1
-fi
+# 4) Append record to proxies.txt => ID SECRET PORT NAME TG_LINK
+echo "$NEW_ID $SECRET $PORT $NAME $TG_LINK" >>"$PROXY_DB_FILE"
 
-# Generate ID and name
-PROXY_ID="p$(date +%s)$RANDOM"
-PROXY_NAME="proxy-$(date +%Y%m%d-%H%M%S)"
-
-# Store: ID SECRET PORT NAME TG_LINK
-echo "$PROXY_ID $SECRET $PORT $PROXY_NAME $TG_LINK" >> "$PROXY_DB_FILE"
-
-# Print single line for bot
-echo "$PROXY_ID $SECRET $PORT $PROXY_NAME $TG_LINK"
+# 5) Print same line to stdout for the Node.js bot
+echo "$NEW_ID $SECRET $PORT $NAME $TG_LINK"
