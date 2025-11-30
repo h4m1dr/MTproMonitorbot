@@ -69,6 +69,42 @@ sync_default_port_from_mtconfig() {
 }
 
 
+purge_full_stack_install() {
+  echo -e "${YELLOW}Purging previous MTProxy + Bot state (full reinstall)...${RESET}"
+
+  # Stop MTProxy service if present
+  if command -v systemctl >/dev/null 2>&1; then
+    if systemctl list-unit-files 2>/dev/null | grep -q "^MTProxy.service"; then
+      echo -e "${CYAN}Stopping MTProxy.service...${RESET}"
+      systemctl stop MTProxy 2>/dev/null || true
+      echo -e "${CYAN}Disabling MTProxy.service...${RESET}"
+      systemctl disable MTProxy 2>/dev/null || true
+      echo -e "${CYAN}Removing MTProxy.service unit file...${RESET}"
+      rm -f /etc/systemd/system/MTProxy.service 2>/dev/null || true
+      systemctl daemon-reload 2>/dev/null || true
+    fi
+  fi
+
+  # Remove MTProxy directory from official installer
+  echo -e "${CYAN}Removing /opt/MTProxy directory (if exists)...${RESET}"
+  rm -rf /opt/MTProxy 2>/dev/null || true
+
+  # Stop bot process via pm2
+  echo -e "${CYAN}Stopping bot (pm2) if running...${RESET}"
+  stop_bot 2>/dev/null || true
+
+  # Remove bot data (default_port, proxies, configs)
+  echo -e "${CYAN}Removing bot data directory ${WHITE}$INSTALL_DIR/data${CYAN}...${RESET}"
+  rm -rf "$INSTALL_DIR/data" 2>/dev/null || true
+
+  # Optionally clear node_modules (npm will reinstall)
+  echo -e "${CYAN}Removing bot node_modules (if exists)...${RESET}"
+  rm -rf "$INSTALL_DIR/node_modules" 2>/dev/null || true
+
+  echo -e "${GREEN}Previous MTProxy + Bot state has been purged.${RESET}"
+}
+
+
 
 # ===== Proxy detection config =====
 # Change these if your stats URL or process name is different
@@ -383,21 +419,38 @@ set_default_port_interactive() {
   local default_port_file="$data_dir/default_port"
   local current_port="2033"
 
-  if [ -f "$default_port_file" ]; then
+  local mt_cfg="/opt/MTProxy/objs/bin/mtconfig.conf"
+  local svc_file="/etc/systemd/system/MTProxy.service"
+  local have_mt_cfg="no"
+
+  # If MTProxy config exists, read current PORT from it
+  if [ -f "$mt_cfg" ]; then
+    local mt_port
+    mt_port="$(grep '^PORT=' "$mt_cfg" | head -n1 | cut -d'=' -f2 | tr -d '[:space:]')"
+    if echo "$mt_port" | grep -Eq '^[0-9]+$'; then
+      current_port="$mt_port"
+      have_mt_cfg="yes"
+    fi
+  elif [ -f "$default_port_file" ]; then
     current_port=$(cat "$default_port_file" 2>/dev/null || echo "2033")
   fi
 
   while true; do
     echo ""
-    echo -e "${CYAN}Default proxy port is used when creating new proxies (if scripts support it).${RESET}"
-    echo -e "${CYAN}Current default port: ${WHITE}$current_port${RESET}"
+    echo -e "${CYAN}Default proxy port is used by the bot when generating proxy links.${RESET}"
+    if [ "$have_mt_cfg" = "yes" ]; then
+      echo -e "${CYAN}MTProxy current PORT (from mtconfig.conf):${RESET} ${WHITE}$current_port${RESET}"
+    else
+      echo -e "${CYAN}Current default port:${RESET} ${WHITE}$current_port${RESET}"
+    fi
+
     if is_port_free "$current_port"; then
-      echo -e "${GREEN}Current port appears to be FREE.${RESET}"
+      echo -e "${GREEN}Current port appears to be FREE (or cannot detect usage).${RESET}"
     else
       echo -e "${YELLOW}Current port appears to be IN USE.${RESET}"
     fi
 
-    echo -ne "${CYAN}Enter default proxy port [${current_port}] or type 'auto' to auto-select a free port: ${RESET}"
+    echo -ne "${CYAN}Enter new proxy port [${current_port}] or type 'auto' to auto-select a free port: ${RESET}"
     read -r port_input
 
     if [ -z "$port_input" ]; then
@@ -411,11 +464,8 @@ set_default_port_interactive() {
         echo -e "${RED}Could not find any free port in the range. Try again.${RESET}"
         continue
       fi
-      echo -e "${GREEN}Auto-selected free port: ${WHITE}$new_port${RESET}"
-      mkdir -p "$data_dir"
-      echo "$new_port" > "$default_port_file"
-      echo -e "${GREEN}Default proxy port set to: ${WHITE}$new_port${RESET}"
-      break
+      port_input="$new_port"
+      echo -e "${GREEN}Auto-selected free port: ${WHITE}$port_input${RESET}"
     fi
 
     if ! echo "$port_input" | grep -Eq '^[0-9]+$'; then
@@ -428,18 +478,48 @@ set_default_port_interactive() {
       continue
     fi
 
+    # We do not enforce free check strictly for MTProxy (installer already handles conflicts),
+    # but we warn the user.
     if ! is_port_free "$port_input"; then
-      echo -ne "${YELLOW}Port ${WHITE}$port_input${YELLOW} is already in use.${RESET} "
-      echo -e "${CYAN}You can try another port or type 'auto' to auto-select a free one.${RESET}"
-      continue
+      echo -e "${YELLOW}Warning: Port ${WHITE}$port_input${YELLOW} seems to be in use.${RESET}"
+      echo -ne "${CYAN}Continue and try to use this port anyway? [y/N]: ${RESET}"
+      read -r ans
+      ans=${ans:-N}
+      if [[ ! "$ans" =~ ^[Yy]$ ]]; then
+        continue
+      fi
     fi
 
+    # 1) Update bot default_port file
     mkdir -p "$data_dir"
     echo "$port_input" > "$default_port_file"
-    echo -e "${GREEN}Default proxy port set to: ${WHITE}$port_input${RESET}"
+    echo -e "${GREEN}Default proxy port for bot links set to:${RESET} ${WHITE}$port_input${RESET}"
+
+    # 2) If MTProxy config exists, update PORT and service and restart
+    if [ "$have_mt_cfg" = "yes" ]; then
+      echo -e "${CYAN}Updating MTProxy configuration to use port ${WHITE}$port_input${CYAN}...${RESET}"
+
+      # Update PORT= line in mtconfig.conf
+      sed -i "s/^PORT=.*/PORT=$port_input/" "$mt_cfg"
+
+      # Update -H <port> in MTProxy.service ExecStart line if service file exists
+      if [ -f "$svc_file" ]; then
+        sed -i -E "s/(ExecStart=.+-H[[:space:]]+)[0-9]+/\\1$port_input/" "$svc_file"
+        echo -e "${CYAN}Reloading systemd daemon and restarting MTProxy.service...${RESET}"
+        systemctl daemon-reload 2>/dev/null || true
+        systemctl restart MTProxy 2>/dev/null || true
+        sleep 1
+        systemctl --no-pager --full status MTProxy 2>/dev/null | sed -n '1,8p'
+      else
+        echo -e "${YELLOW}MTProxy.service unit file not found at ${WHITE}$svc_file${YELLOW}.${RESET}"
+        echo -e "${YELLOW}You may need to re-run the official installer if service fails to start.${RESET}"
+      fi
+    fi
+
     break
   done
 }
+
 
 # ===== Configure Host / DNS (for proxy links) =====
 configure_host_dns_interactive() {
@@ -561,10 +641,12 @@ full_install_mtproxy_and_bot() {
 
   if is_full_stack_installed; then
     echo -e "${GREEN}It looks like MTProxy + Bot are already installed.${RESET}"
-    echo -ne "${CYAN}Re-run full installation (MTProxy + Bot)? [y/N]: ${RESET}"
+    echo -ne "${CYAN}Completely purge previous install and reinstall everything from scratch? [y/N]: ${RESET}"
     read -r ans
     ans=${ans:-N}
-    if [[ ! "$ans" =~ ^[Yy]$ ]]; then
+    if [[ "$ans" =~ ^[Yy]$ ]]; then
+      purge_full_stack_install
+    else
       echo -e "${YELLOW}Skipping full reinstall.${RESET}"
       read -r -p "Press Enter to return to Prerequisites Menu... " _
       return
@@ -600,6 +682,7 @@ full_install_mtproxy_and_bot() {
   echo -e "${GREEN}Full installation (MTProxy + Bot) is complete.${RESET}"
   read -r -p "Press Enter to return to Prerequisites Menu... " _
 }
+
 
 
 
@@ -901,7 +984,8 @@ main_menu() {
     echo -e "${MAGENTA}${BOLD}╰───────────────────────────────╯${RESET}"
     echo -e " ${CYAN}[1]${RESET} Prerequisites Menu (install base packages, pm2, full install)"
     echo -e " ${CYAN}[2]${RESET} Bot Menu (token, port, host/DNS, pm2 control, manual edit)"
-    echo -e " ${CYAN}[3]${RESET} Cleanup Menu (stop, remove, clean cache)"
+    echo -e " ${CYAN}[3]${RESET} MTProxy Menu (run official installer / advanced options)"
+    echo -e " ${CYAN}[4]${RESET} Cleanup Menu (stop, remove, clean cache)"
     echo -e " ${CYAN}[0]${RESET} Exit"
     echo ""
     echo -ne "${WHITE}Select an option: ${RESET}"
@@ -920,13 +1004,16 @@ main_menu() {
         fi
         ;;
       3)
-        if ! is_full_stack_installed; then
-          echo -e "${RED}Full installation has not been completed yet.${RESET}"
+        if ! is_mtproxy_installed; then
+          echo -e "${RED}MTProxy is not installed yet.${RESET}"
           echo -e "${CYAN}Go to Prerequisites Menu → [3] Full Install (MTProxy + Bot) first.${RESET}"
           read -r -p "Press Enter to return to Main Menu... " _
         else
-          cleanup_menu
+          install_mtproxy_official_menu
         fi
+        ;;
+      4)
+        cleanup_menu
         ;;
       0)
         echo -e "${GREEN}Bye.${RESET}"
@@ -939,6 +1026,7 @@ main_menu() {
     esac
   done
 }
+
 
 # ===== Start script =====
 auto_first_run_setup
