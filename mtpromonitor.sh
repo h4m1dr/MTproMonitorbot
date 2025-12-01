@@ -1,346 +1,1148 @@
-# MTPro Monitor Bot — Auto Installer
-
-**Version:** v1.0.0
-
-This project provides a fully automated, menu-based installer and manager for **MTPro Monitor Bot** and **official C MTProxy** on Linux servers.  
-It aims to make setup so simple that the user only runs **one script** and uses menus — no manual editing, no complex commands.
-
----
-
-## 🔍 Overview
-
-MTPro Monitor Bot Auto Installer:
-
-- Installs and configures:
-  - System prerequisites (git, curl, node, npm)
-  - PM2 process manager
-  - Official C MTProxy (via [MTProtoProxyInstaller](https://github.com/HirbodBehnam/MTProtoProxyInstaller))
-  - MTPro Monitor Bot itself
-- Provides a **unified interactive menu** to:
-  - Install / update everything in one shot (*Full Install: MTProxy + Bot*)
-  - Change ports, host/DNS, and MTProxy Fake-TLS domain
-  - Start/stop/restart the bot with PM2
-  - Clean up and remove files/processes safely
-- Shows a **live status panel** at the top of every menu, including:
-  - Installed prerequisites
-  - MTProxy status (OFF / INSTALLED / RUNNING + port + TLS domain)
-  - Bot token status (not installed / not set / masked token)
-  - Public IP / DNS / default proxy port
-
-The installer **never runs `apt upgrade` or `dist-upgrade`**. All changes are contained to the bot/MTProxy directories and required packages only. :contentReference[oaicite:1]{index=1}
-
----
-
-## 💾 System Requirements & Disk Usage
-
-The installer uses minimal packages and **does not perform any system-wide upgrades**.
-
-Disk usage below is based on a real Ubuntu VPS (approximate):
-
-| Component                | Disk Usage (approx.) |
-|-------------------------|----------------------|
-| `curl`                  | 0.5 MB               |
-| `git`                   | 21.2 MB              |
-| `nodejs`                | 3.8 MB               |
-| `npm`                   | 2.9 MB               |
-| **Base prerequisites**  | **≈ 28.4 MB**        |
-| `pm2` (global via npm)  | ≈ 34 MB              |
-
-The bot directory (`/opt/MTproMonitorbot`) typically uses **~5–40 MB** after `npm install`, depending on Node modules and logs. :contentReference[oaicite:2]{index=2}
-
----
-
-## 🚀 Installation
-
-> **Target directory:** `/opt/MTproMonitorbot`  
-> The installer only touches this directory and the official MTProxy path `/opt/MTProxy`.
-
-### 1. Clone the repository
-
-```bash
-cd /opt
-sudo git clone https://github.com/h4m1dr/MTproMonitorbot.git
-cd MTproMonitorbot
-````
-
-### 2. Run the installer
-
-```bash
-sudo bash mtpromonitor.sh
-```
-
-You **do not** need to run `chmod +x` manually.
-The script’s own bootstrap (`auto_first_run_setup`) will mark helper scripts as executable on first run.
-
----
-
-## 🧭 Main Menu
-
-When you run `mtpromonitor.sh`, you’ll see the **Main Menu**:
-
-* A big ASCII header
-
-* A **status block** like:
-
-  ```text
-  Status:
-    Prereqs : git curl node npm
-    Proxy   : RUNNING (port=4949, tls=www.cloudflare.com)
-    BotToken: 123456...9abc
-  Net:
-    IP         : 1.2.3.4
-    DNS        : (not set)
-    DefaultPort: 4949
-  ```
-
-* Then the main options:
-
-```text
-[1] Prerequisites Menu (install base packages, pm2, full install)
-[2] Bot Menu (token, port, host/DNS, pm2 control, manual edit)
-[3] MTProxy Menu (run official installer / advanced options)
-[4] Cleanup Menu (stop, remove, clean cache)
-[0] Exit
-```
-
----
-
-## ✅ Status Block Details
-
-The **status block** is shown at the top of every menu:
-
-* **Prereqs**
-
-  * Shows which commands are actually installed: `git curl node npm`
-  * If nothing is installed, it will show: `Prereqs : no`
-
-* **Proxy**
-
-  * States if MTProxy is:
-
-    * `OFF`
-    * `INSTALLED` (service exists but not running)
-    * `RUNNING` (with port + TLS)
-  * Reads configuration from:
-
-    * `/opt/MTProxy/objs/bin/mtconfig.conf` (official installer)
-    * `/etc/systemd/system/MTProxy.service` (systemd unit)
-  * Example: `RUNNING (port=4949, tls=www.cloudflare.com)`
-
-* **BotToken**
-
-  * `NOT INSTALLED` — bot folder not present
-  * `NOT SET` — placeholder `TOKEN_HERE` still in `bot/index.js`
-  * masked token when set, e.g. `123456...9abc`
-
-* **Net**
-
-  * `IP` — public IP or `publicHost` from config (if set)
-  * `DNS` — custom DNS name configured for links (or `(not set)`)
-  * `DefaultPort` — port used in generated proxy links (read from `data/default_port`)
-
----
-
-## 🔧 Prerequisites Menu
-
-From Main Menu, choose:
-
-```text
-[1] Prerequisites Menu
-```
-
-Here you get:
-
-1. **Install / Update base packages (git, curl, nodejs, npm)**
-
-   * Installs only the needed packages.
-   * Already-installed packages are skipped.
-   * Approx disk usage: **~28.4 MB**
-
-2. **Install / Update pm2**
-
-   * Installs or updates `pm2` globally via npm.
-   * Approx disk usage: **~34 MB**
-
-3. **Full Install: official MTProxy + MTPro Monitor Bot**
-
-   * The **one-shot installer**:
-
-     * Runs Hirbod’s official C MTProxy installer (MTProtoProxyInstaller)
-
-       * You choose port, secret(s), TLS_DOMAIN, NAT etc.
-     * Reads the chosen port from `mtconfig.conf`
-     * Installs/updates MTPro Monitor Bot (pulls from this repo)
-     * Syncs `data/default_port` with MTProxy’s PORT
-   * On re-run:
-
-     * Offers to **purge previous MTProxy + Bot install** and reinstall from scratch
-       (stops service, removes `/opt/MTProxy`, resets `data/` etc.)
-
----
-
-## 🤖 Bot Menu
-
-From Main Menu:
-
-```text
-[2] Bot Menu (token, port, host/DNS, pm2 control, manual edit)
-```
-
-Options (simplified overview):
-
-1. **Set / Change Bot Token**
-
-   * Edits `bot/index.js` and sets `const TOKEN = "..."`
-   * If a token already exists, you can choose to keep or replace it.
-
-2. **Set / Change Default Proxy Port**
-
-   * Synchronizes:
-
-     * `data/default_port`
-     * `PORT` in `/opt/MTProxy/objs/bin/mtconfig.conf`
-     * `-H <port>` in `/etc/systemd/system/MTProxy.service`
-   * Restarts `MTProxy.service` with the new port.
-
-3. **Configure Host / DNS for proxy links**
-
-   * Allows setting:
-
-     * Public host / IP used in generated `tg://` links
-     * Optional DNS name
-
-4. **Start Bot (pm2)**
-
-5. **Stop Bot (pm2)**
-
-6. **Restart Bot (pm2)**
-
-7. **Show pm2 status**
-
-8. **Manual Edit**
-
-   * Quickly open:
-
-     * `bot/index.js`
-     * scripts inside `scripts/`
-     * `data/usage.json`
-
----
-
-## 🧱 MTProxy Menu (Wrapper Around Hirbod’s Installer)
-
-From Main Menu:
-
-```text
-[3] MTProxy Menu (run official installer / advanced options)
-```
-
-This menu is a **wrapper** around the original
-[[MTProtoProxyInstaller](https://github.com/HirbodBehnam/MTProtoProxyInstaller)](https://github.com/HirbodBehnam/MTProtoProxyInstaller) by **Hirbod Behnam**.
-
-* If MTProxy is not installed yet, you will be asked to first run **Full Install** from the Prerequisites Menu.
-* When installed, entering this menu:
-
-  * Shows the unified status header (like other menus)
-  * Then **directly opens** Hirbod’s MTProxy installer/menu:
-
-    * Show connection links
-    * Change TAG
-    * Add / revoke secrets
-    * Change worker numbers
-    * Change NAT settings
-    * Change custom arguments
-    * Generate firewall rules
-    * Uninstall proxy
-    * About
-* When you exit that menu, you are returned back to the Main Menu via the wrapper.
-
-> The core MTProxy installation logic is fully credited to **Hirbod Behnam** and his
-> project [[MTProtoProxyInstaller](https://github.com/HirbodBehnam/MTProtoProxyInstaller)](https://github.com/HirbodBehnam/MTProtoProxyInstaller).
-> This project only wraps it in an outer menu with additional integration features.
-
----
-
-## 🧹 Cleanup Menu
-
-From Main Menu:
-
-```text
-[4] Cleanup Menu (stop, remove, clean cache)
-```
-
-Allows you to:
-
-* Stop and remove the bot’s PM2 process (`mtpromonitorbot`)
-* Remove bot data under `/opt/MTproMonitorbot/data`
-* Optionally remove `node_modules` for a clean reinstall
-* Clear npm cache (safe, optional)
-
-This menu **never touches other `/opt` projects** and does **not** uninstall MTProxy by itself
-(MTProxy uninstall is exposed via the MTProxy Menu → Hirbod’s script).
-
----
-
-## 🔁 Updating the Installer
-
-When you change the script on your local machine and push to GitHub:
-
-### On your local (Windows / dev machine):
-
-```bash
-git add mtpromonitor.sh README.md
-git commit -m "update installer menus and README"
-git push
-```
-
-### On the server:
-
-```bash
-cd /opt/MTproMonitorbot
-sudo git pull
-sudo bash mtpromonitor.sh
-```
-
-No extra `chmod` commands are needed — the script handles that automatically.
-
----
-
-## 📦 Repository
-
-Project GitHub:
-
-* **MTPro Monitor Bot Auto Installer**
-  [https://github.com/h4m1dr/MTproMonitorbot](https://github.com/h4m1dr/MTproMonitorbot)
-
-External projects used / wrapped:
-
-* **MTProtoProxyInstaller** (official C MTProxy installer & manager)
-  By **Hirbod Behnam**
-  [https://github.com/HirbodBehnam/MTProtoProxyInstaller](https://github.com/HirbodBehnam/MTProtoProxyInstaller)
-* **Telegram MTProxy (C implementation)**
-  [https://github.com/TelegramMessenger/MTProxy](https://github.com/TelegramMessenger/MTProxy)
-
-Other tools:
-
-* **Node.js + npm** — JavaScript runtime & package manager
-* **PM2** — Process manager for Node.js applications
-
-All credits for MTProxy installation, management logic and configuration menu
-go to **Hirbod Behnam**’s MTProtoProxyInstaller project.
-This repository focuses on **wrapping** those capabilities with a Telegram bot installer,
-status UI, and a single unified menu experience.
-
----
-
-## 🆘 Support
-
-If you:
-
-* Find a bug
-* Need help installing
-* Have feature requests
-
-…please open an issue on:
-
-> [https://github.com/h4m1dr/MTproMonitorbot/issues](https://github.com/h4m1dr/MTproMonitorbot/issues)
+#!/bin/bash
+# MTPro Monitor Bot installer & manager
+# All comments are in English
+
+# ===== Colors =====
+RED='\e[91m'
+GREEN='\e[92m'
+YELLOW='\e[93m'
+BLUE='\e[94m'
+MAGENTA='\e[95m'
+CYAN='\e[96m'
+WHITE='\e[97m'
+BOLD='\e[1m'
+RESET='\e[0m'
+
+# ===== Global paths =====
+INSTALL_DIR="/opt/MTproMonitorbot"
+SERVICE_NAME="mtpromonitorbot"
+CONFIG_PATH="$INSTALL_DIR/data/config.json"
+
+
+# ===== Helper: detect if MTProxy and bot are installed =====
+is_mtproxy_installed() {
+  # Check for systemd service or mtconfig.conf from official installer
+  if command -v systemctl >/dev/null 2>&1; then
+    if systemctl list-unit-files 2>/dev/null | grep -q "^MTProxy.service"; then
+      return 0
+    fi
+  fi
+  if [ -f "/opt/MTProxy/objs/bin/mtconfig.conf" ]; then
+    return 0
+  fi
+  return 1
+}
+
+is_bot_installed() {
+  if [ -d "$INSTALL_DIR" ] && [ -f "$INSTALL_DIR/bot/index.js" ]; then
+    return 0
+  fi
+  return 1
+}
+
+is_full_stack_installed() {
+  is_mtproxy_installed && is_bot_installed
+}
+
+# Sync bot default_port from official MTProxy config
+sync_default_port_from_mtconfig() {
+  local cfg="/opt/MTProxy/objs/bin/mtconfig.conf"
+  local data_dir="$INSTALL_DIR/data"
+  local default_port_file="$data_dir/default_port"
+
+  if [ ! -f "$cfg" ]; then
+    echo -e "${YELLOW}MTProxy config file not found (${cfg}). Skipping default port sync.${RESET}"
+    return
+  fi
+
+  local mt_port
+  mt_port="$(grep '^PORT=' "$cfg" | head -n1 | cut -d'=' -f2 | tr -d '[:space:]')"
+
+  if ! echo "$mt_port" | grep -Eq '^[0-9]+$'; then
+    echo -e "${YELLOW}Could not detect PORT=... in ${cfg}. Skipping default port sync.${RESET}"
+    return
+  fi
+
+  mkdir -p "$data_dir"
+  echo "$mt_port" > "$default_port_file"
+  echo -e "${GREEN}Synced bot default proxy port with MTProxy PORT:${RESET} ${WHITE}$mt_port${RESET}"
+}
+
+
+purge_full_stack_install() {
+  echo -e "${YELLOW}Purging previous MTProxy + Bot state (full reinstall)...${RESET}"
+
+  # Stop MTProxy service if present
+  if command -v systemctl >/dev/null 2>&1; then
+    if systemctl list-unit-files 2>/dev/null | grep -q "^MTProxy.service"; then
+      echo -e "${CYAN}Stopping MTProxy.service...${RESET}"
+      systemctl stop MTProxy 2>/dev/null || true
+      echo -e "${CYAN}Disabling MTProxy.service...${RESET}"
+      systemctl disable MTProxy 2>/dev/null || true
+      echo -e "${CYAN}Removing MTProxy.service unit file...${RESET}"
+      rm -f /etc/systemd/system/MTProxy.service 2>/dev/null || true
+      systemctl daemon-reload 2>/dev/null || true
+    fi
+  fi
+
+  # Remove MTProxy directory from official installer
+  echo -e "${CYAN}Removing /opt/MTProxy directory (if exists)...${RESET}"
+  rm -rf /opt/MTProxy 2>/dev/null || true
+
+  # Stop bot process via pm2
+  echo -e "${CYAN}Stopping bot (pm2) if running...${RESET}"
+  stop_bot 2>/dev/null || true
+
+  # Remove bot data (default_port, proxies, configs)
+  echo -e "${CYAN}Removing bot data directory ${WHITE}$INSTALL_DIR/data${CYAN}...${RESET}"
+  rm -rf "$INSTALL_DIR/data" 2>/dev/null || true
+
+  # Optionally clear node_modules (npm will reinstall)
+  echo -e "${CYAN}Removing bot node_modules (if exists)...${RESET}"
+  rm -rf "$INSTALL_DIR/node_modules" 2>/dev/null || true
+
+  echo -e "${GREEN}Previous MTProxy + Bot state has been purged.${RESET}"
+}
+
+
+
+# ===== Proxy detection config =====
+# Change these if your stats URL or process name is different
+PROXY_STATS_URL="http://127.0.0.1:8888/stats"
+PROXY_PROCESS_PATTERN="mtproto|mtproxy|mtprotoproxy|mtg|mtgproxy|mtproxy-go"
+
+# ===== Helper: check if command exists =====
+has_cmd() {
+  command -v "$1" >/dev/null 2>&1
+}
+
+# ===== Helper: check if apt package is installed =====
+is_pkg_installed() {
+  dpkg-query -W -f='${Status}' "$1" 2>/dev/null | grep -q "install ok installed"
+}
+
+# ===== Helper: check if TCP port is free =====
+is_port_free() {
+  local PORT="$1"
+
+  if has_cmd ss; then
+    if ss -tuln 2>/dev/null | grep -q ":${PORT} "; then
+      return 1  # used
+    fi
+  elif has_cmd netstat; then
+    if netstat -tuln 2>/dev/null | grep -q ":${PORT} "; then
+      return 1  # used
+    fi
+  fi
+
+  return 0  # free (or cannot detect, assume free)
+}
+
+# ===== Auto first-run setup (replaces old setup.sh) =====
+auto_first_run_setup() {
+  # Detect script root directory (where mtpromonitor.sh is located)
+  local ROOT_DIR
+  ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+
+  # Prepare sudo if not running as root
+  local SUDO_CMD=""
+  if [ "$EUID" -ne 0 ]; then
+    if command -v sudo >/dev/null 2>&1; then
+      SUDO_CMD="sudo"
+    fi
+  fi
+
+  # Make helper shell scripts executable (scripts/*.sh + this script)
+  if [ -d "$ROOT_DIR/scripts" ]; then
+    $SUDO_CMD chmod +x "$ROOT_DIR"/scripts/*.sh 2>/dev/null || true
+  fi
+
+  # Make this file executable
+  $SUDO_CMD chmod +x "$ROOT_DIR/$(basename "$0")" 2>/dev/null || true
+
+  # NO auto-install, NO questions, NO MTProxy checks  
+  # Everything related to installation happens ONLY inside Prerequisites Menu
+}
+
+
+# ===== Helper: find a free port (default first, then random range) =====
+find_free_port() {
+  local DEFAULT_PORT="$1"
+  local MIN_PORT=20000
+  local MAX_PORT=40000
+  local TRY_LIMIT=50
+
+  # 1) Try default port if provided
+  if [ -n "$DEFAULT_PORT" ]; then
+    if is_port_free "$DEFAULT_PORT"; then
+      echo "$DEFAULT_PORT"
+      return 0
+    fi
+  fi
+
+  # 2) Try random ports in range
+  local i=0
+  while [ "$i" -lt "$TRY_LIMIT" ]; do
+    local PORT=$(( RANDOM % (MAX_PORT - MIN_PORT + 1) + MIN_PORT ))
+    if is_port_free "$PORT"; then
+      echo "$PORT"
+      return 0
+    fi
+    i=$((i + 1))
+  done
+
+  # 3) No free port found in attempts
+  echo ""
+  return 1
+}
+
+# ===== Detect public IP (for default host) =====
+detect_public_ip() {
+  local ip=""
+
+  if has_cmd curl; then
+    ip=$(curl -s https://ifconfig.me 2>/dev/null)
+    if echo "$ip" | grep -Eq '^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$'; then
+      echo "$ip"
+      return 0
+    fi
+    ip=$(curl -s https://api.ipify.org 2>/dev/null)
+    if echo "$ip" | grep -Eq '^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$'; then
+      echo "$ip"
+      return 0
+    fi
+  fi
+
+  if has_cmd dig; then
+    ip=$(dig +short myip.opendns.com @resolver1.opendns.com 2>/dev/null | tail -n1)
+    if echo "$ip" | grep -Eq '^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$'; then
+      echo "$ip"
+      return 0
+    fi
+  fi
+
+  echo ""
+  return 1
+}
+
+# ===== Config helpers (config.json for host/DNS) =====
+
+get_config_value() {
+  local KEY="$1"
+  if [ ! -f "$CONFIG_PATH" ]; then
+    echo ""
+    return 0
+  fi
+  # naive JSON field extraction: "key": "value"
+  sed -n "s/.*\"$KEY\" *: *\"\([^\"]*\)\".*/\1/p" "$CONFIG_PATH" | head -n1
+}
+
+write_config_values() {
+  local HOST="$1"
+  local DNS="$2"
+  local dir
+  dir="$(dirname "$CONFIG_PATH")"
+  mkdir -p "$dir"
+
+  cat >"$CONFIG_PATH" <<EOF
+{
+  "publicHost": "$HOST",
+  "dnsName": "$DNS"
+}
+EOF
+}
+
+# ===== Short status line under header =====
+short_status_header() {
+  # ----- Prerequisites: show installed commands -----
+  local prereq_list=""
+  for cmd in git curl node npm; do
+    if has_cmd "$cmd"; then
+      prereq_list="$prereq_list $cmd"
+    fi
+  done
+
+  local prereq_display
+  if [ -z "$prereq_list" ]; then
+    prereq_display="no"
+  else
+    prereq_display="$prereq_list"
+  fi
+
+  local prereq_colored
+  if [ "$prereq_display" = "no" ]; then
+    prereq_colored="${RED}no${RESET}"
+  else
+    prereq_colored="${GREEN}${prereq_display}${RESET}"
+  fi
+
+  # ----- Proxy status: systemd + config (PORT / TLS) -----
+  local proxy_status="OFF"
+  local proxy_port=""
+  local tls_domain=""
+
+  # Check via systemd
+  if command -v systemctl >/dev/null 2>&1; then
+    if systemctl is-active MTProxy >/dev/null 2>&1; then
+      proxy_status="RUNNING"
+    elif systemctl list-unit-files 2>/dev/null | grep -q "^MTProxy.service"; then
+      proxy_status="INSTALLED"
+    fi
+  fi
+
+  # Fallback: process name only (no systemd)
+  if [ "$proxy_status" = "OFF" ] && pgrep -fi "$PROXY_PROCESS_PATTERN" >/dev/null 2>&1; then
+    proxy_status="RUNNING(no systemd)"
+  fi
+
+  # Read PORT from mtconfig.conf (official installer)
+  local mt_cfg="/opt/MTProxy/objs/bin/mtconfig.conf"
+  if [ -f "$mt_cfg" ]; then
+    local p
+    p="$(grep '^PORT=' "$mt_cfg" | head -n1 | cut -d'=' -f2 | tr -d '[:space:]')"
+    if echo "$p" | grep -Eq '^[0-9]+$'; then
+      proxy_port="$p"
+    fi
+  fi
+
+  # Read PORT and TLS from MTProxy.service ExecStart (if exists)
+  local svc_file="/etc/systemd/system/MTProxy.service"
+  if [ -f "$svc_file" ]; then
+    local line
+    line="$(grep '^ExecStart=' "$svc_file" | head -n1 || true)"
+
+    # Extract -H <port>
+    local p2
+    p2="$(echo "$line" | sed -E 's/.*-H[[:space:]]+([0-9]+).*/\1/' || true)"
+    if echo "$p2" | grep -Eq '^[0-9]+$'; then
+      proxy_port="$p2"
+    fi
+
+    # Extract -D <tls_domain>
+    local tls
+    tls="$(echo "$line" | sed -E 's/.*-D[[:space:]]+([^[:space:]]+).*/\1/' || true)"
+    if [ -n "$tls" ] && ! echo "$tls" | grep -q "ExecStart"; then
+      tls_domain="$tls"
+    fi
+  fi
+
+  local proxy_summary
+  if [ "$proxy_status" = "OFF" ]; then
+    proxy_summary="${RED}OFF${RESET}"
+  else
+    proxy_summary="${GREEN}${proxy_status}${RESET}"
+    if [ -n "$proxy_port" ]; then
+      proxy_summary="${proxy_summary} (port=${WHITE}${proxy_port}${RESET}"
+      if [ -n "$tls_domain" ]; then
+        proxy_summary="${proxy_summary}, tls=${WHITE}${tls_domain}${RESET})"
+      else
+        proxy_summary="${proxy_summary})"
+      fi
+    elif [ -n "$tls_domain" ]; then
+      proxy_summary="${proxy_summary} (tls=${WHITE}${tls_domain}${RESET})"
+    fi
+  fi
+
+  # ----- Bot token status + masked value -----
+  local token_status="NOT INSTALLED"
+  local token_display="NOT INSTALLED"
+
+  if [ -f "$INSTALL_DIR/bot/index.js" ]; then
+    local tok
+    tok="$(sed -n 's/.*const TOKEN = "\([^"]*\)".*/\1/p' "$INSTALL_DIR/bot/index.js" | head -n1)"
+    if [ -z "$tok" ] || [ "$tok" = "TOKEN_HERE" ]; then
+      token_status="NOT SET"
+      token_display="${YELLOW}NOT SET${RESET}"
+    else
+      token_status="SET"
+      # Mask token for safety (first 6 + last 4)
+      local len=${#tok}
+      local masked
+      if [ "$len" -le 10 ]; then
+        masked="$tok"
+      else
+        masked="${tok:0:6}...${tok: -4}"
+      fi
+      token_display="${GREEN}${masked}${RESET}"
+    fi
+  fi
+
+  if [ "$token_status" = "NOT INSTALLED" ]; then
+    token_display="${RED}NOT INSTALLED${RESET}"
+  fi
+
+  # ----- Network info: public IP + DNS + default_port -----
+  local current_host
+  local current_dns
+  current_host="$(get_config_value "publicHost")"
+  current_dns="$(get_config_value "dnsName")"
+
+  # If host not set in config, try auto-detect public IP
+  local ip_display="$current_host"
+  if [ -z "$ip_display" ]; then
+    ip_display="$(detect_public_ip)"
+  fi
+  [ -z "$ip_display" ] && ip_display="(unknown)"
+  [ -z "$current_dns" ] && current_dns="(not set)"
+
+  local default_port_display="-"
+  local default_port_file="$INSTALL_DIR/data/default_port"
+  if [ -f "$default_port_file" ]; then
+    local dp
+    dp="$(cat "$default_port_file" 2>/dev/null)"
+    if echo "$dp" | grep -Eq '^[0-9]+$'; then
+      default_port_display="$dp"
+    fi
+  fi
+
+  # ----- Final pretty output -----
+  echo -e "${WHITE}${BOLD}Status:${RESET}"
+  echo -e "  Prereqs : $prereq_colored"
+  echo -e "  Proxy   : $proxy_summary"
+  echo -e "  BotToken: $token_display"
+  echo -e "${WHITE}Net:${RESET}"
+  echo -e "  IP         : ${WHITE}$ip_display${RESET}"
+  echo -e "  DNS        : ${WHITE}$current_dns${RESET}"
+  echo -e "  DefaultPort: ${WHITE}$default_port_display${RESET}"
+  echo ""
+}
+
+
+
+# ===== Install prerequisites via apt (Debian/Ubuntu) =====
+install_prereqs() {
+  echo -e "${MAGENTA}${BOLD}Installing prerequisites (Debian/Ubuntu)...${RESET}"
+
+  if ! has_cmd apt; then
+    echo -e "${RED}apt not found. Please install Node.js, npm, git, curl manually.${RESET}"
+    return
+  fi
+
+  if [ "$EUID" -ne 0 ]; then
+    echo -e "${RED}This step requires root. Re-run script with sudo to auto-install packages.${RESET}"
+    return
+  fi
+
+  local packages="git curl nodejs npm"
+  local missing=""
+  for pkg in $packages; do
+    if ! is_pkg_installed "$pkg"; then
+      missing="$missing $pkg"
+    fi
+  done
+
+  if [ -z "$missing" ]; then
+    echo -e "${GREEN}All base packages are already installed. Nothing to do.${RESET}"
+    return
+  fi
+
+  echo -e "${YELLOW}The following packages will be installed:${RESET}$missing"
+  echo -e "${YELLOW}Approximate total disk usage (if all are missing): ~28.4 MB on this VPS.${RESET}"
+  echo ""
+
+  apt update
+  apt install -y $missing
+
+  echo -e "${GREEN}Base prerequisites installation finished.${RESET}"
+}
+
+# ===== Install or update pm2 =====
+install_pm2() {
+  echo -e "${MAGENTA}${BOLD}Installing or updating pm2...${RESET}"
+
+  if ! has_cmd npm; then
+    echo -e "${RED}npm not found. Install Node.js + npm first.${RESET}"
+    return
+  fi
+
+  if has_cmd pm2; then
+    echo -ne "${YELLOW}pm2 is already installed. Reinstall / update it now? [y/N]: ${RESET}"
+    read -r ans
+    if [[ ! "$ans" =~ ^[Yy]$ ]]; then
+      echo -e "${YELLOW}Skipped pm2 installation/update.${RESET}"
+      return
+    fi
+  fi
+
+  echo -e "${YELLOW}Approximate disk usage for pm2: ~34 MB (global npm) on this VPS.${RESET}"
+  npm install -g pm2
+  echo -e "${GREEN}pm2 is installed/updated.${RESET}"
+}
+
+install_mtproxy_official_menu() {
+  clear
+  echo -e "${CYAN}${BOLD}MTPro Monitor Bot | MTProxy Menu${RESET}"
+  short_status_header
+  echo -e "${MAGENTA}${BOLD}╭───────────────────────────────╮${RESET}"
+  echo -e "${MAGENTA}${BOLD}│ ${WHITE}Run Official MTProxy Menu${MAGENTA}   │${RESET}"
+  echo -e "${MAGENTA}${BOLD}╰───────────────────────────────╯${RESET}"
+  echo ""
+
+  if [ ! -f "$INSTALL_DIR/scripts/install_mtproxy_official.sh" ]; then
+    echo -e "${RED}$INSTALL_DIR/scripts/install_mtproxy_official.sh not found in repo.${RESET}"
+    echo -e "${YELLOW}Make sure you added it to your project and pushed to GitHub.${RESET}"
+    read -r -p "Press Enter to return to Main Menu... " _
+    return
+  fi
+
+  echo -e "${CYAN}Opening original MTProxy installer/menu by Hirbod (MTProtoProxyInstaller)...${RESET}"
+  echo -e "${CYAN}From here, you can use all options of his script (reinstall, change config, uninstall, etc.).${RESET}"
+  echo ""
+
+  # Directly run the installer script (shows Hirbod's own menu, no extra question)
+  sudo bash "$INSTALL_DIR/scripts/install_mtproxy_official.sh"
+
+  echo ""
+  echo -e "${GREEN}Returned from Hirbod MTProxy installer/menu.${RESET}"
+  read -r -p "Press Enter to return to Main Menu... " _
+}
+
+
+
+# ===== Ask for bot token =====
+ask_bot_token() {
+  echo -ne "${CYAN}Enter your Telegram Bot Token: ${RESET}"
+  read -r BOT_TOKEN
+  if [ -z "$BOT_TOKEN" ]; then
+    echo -e "${RED}Bot token cannot be empty.${RESET}"
+    return 1
+  fi
+  BOT_TOKEN_VALUE="$BOT_TOKEN"
+  return 0
+}
+
+# ===== Configure bot token inside bot/index.js =====
+set_token_in_index() {
+  local target_file="$INSTALL_DIR/bot/index.js"
+  if [ ! -f "$target_file" ]; then
+    echo -e "${RED}Cannot find $target_file to set token.${RESET}"
+    return 1
+  fi
+
+  if grep -q 'const TOKEN = ' "$target_file"; then
+    sed -i "s|const TOKEN = \".*\";|const TOKEN = \"$BOT_TOKEN_VALUE\";|" "$target_file"
+    echo -e "${GREEN}Bot token has been written into bot/index.js${RESET}"
+  else
+    echo -e "${YELLOW}Could not find TOKEN constant in bot/index.js. Please update it manually.${RESET}"
+    return 1
+  fi
+}
+
+# ===== Set / Change default proxy port (with free-port check) =====
+set_default_port_interactive() {
+  local data_dir="$INSTALL_DIR/data"
+  local default_port_file="$data_dir/default_port"
+  local current_port="2033"
+
+  local mt_cfg="/opt/MTProxy/objs/bin/mtconfig.conf"
+  local svc_file="/etc/systemd/system/MTProxy.service"
+  local have_mt_cfg="no"
+
+  # If MTProxy config exists, read current PORT from it
+  if [ -f "$mt_cfg" ]; then
+    local mt_port
+    mt_port="$(grep '^PORT=' "$mt_cfg" | head -n1 | cut -d'=' -f2 | tr -d '[:space:]')"
+    if echo "$mt_port" | grep -Eq '^[0-9]+$'; then
+      current_port="$mt_port"
+      have_mt_cfg="yes"
+    fi
+  elif [ -f "$default_port_file" ]; then
+    current_port=$(cat "$default_port_file" 2>/dev/null || echo "2033")
+  fi
+
+  while true; do
+    echo ""
+    echo -e "${CYAN}Default proxy port is used by the bot when generating proxy links.${RESET}"
+    if [ "$have_mt_cfg" = "yes" ]; then
+      echo -e "${CYAN}MTProxy current PORT (from mtconfig.conf):${RESET} ${WHITE}$current_port${RESET}"
+    else
+      echo -e "${CYAN}Current default port:${RESET} ${WHITE}$current_port${RESET}"
+    fi
+
+    if is_port_free "$current_port"; then
+      echo -e "${GREEN}Current port appears to be FREE (or cannot detect usage).${RESET}"
+    else
+      echo -e "${YELLOW}Current port appears to be IN USE.${RESET}"
+    fi
+
+    echo -ne "${CYAN}Enter new proxy port [${current_port}] or type 'auto' to auto-select a free port: ${RESET}"
+    read -r port_input
+
+    if [ -z "$port_input" ]; then
+      port_input="$current_port"
+    fi
+
+    if [[ "$port_input" =~ ^[Aa][Uu][Tt][Oo]$ ]]; then
+      local new_port
+      new_port=$(find_free_port "$current_port")
+      if [ -z "$new_port" ]; then
+        echo -e "${RED}Could not find any free port in the range. Try again.${RESET}"
+        continue
+      fi
+      port_input="$new_port"
+      echo -e "${GREEN}Auto-selected free port: ${WHITE}$port_input${RESET}"
+    fi
+
+    if ! echo "$port_input" | grep -Eq '^[0-9]+$'; then
+      echo -e "${RED}Invalid port. Please enter a number between 1 and 65535, or 'auto'.${RESET}"
+      continue
+    fi
+
+    if [ "$port_input" -lt 1 ] || [ "$port_input" -gt 65535 ]; then
+      echo -e "${RED}Port out of range. Please enter 1–65535.${RESET}"
+      continue
+    fi
+
+    # We do not enforce free check strictly for MTProxy (installer already handles conflicts),
+    # but we warn the user.
+    if ! is_port_free "$port_input"; then
+      echo -e "${YELLOW}Warning: Port ${WHITE}$port_input${YELLOW} seems to be in use.${RESET}"
+      echo -ne "${CYAN}Continue and try to use this port anyway? [y/N]: ${RESET}"
+      read -r ans
+      ans=${ans:-N}
+      if [[ ! "$ans" =~ ^[Yy]$ ]]; then
+        continue
+      fi
+    fi
+
+    # 1) Update bot default_port file
+    mkdir -p "$data_dir"
+    echo "$port_input" > "$default_port_file"
+    echo -e "${GREEN}Default proxy port for bot links set to:${RESET} ${WHITE}$port_input${RESET}"
+
+    # 2) If MTProxy config exists, update PORT and service and restart
+    if [ "$have_mt_cfg" = "yes" ]; then
+      echo -e "${CYAN}Updating MTProxy configuration to use port ${WHITE}$port_input${CYAN}...${RESET}"
+
+      # Update PORT= line in mtconfig.conf
+      sed -i "s/^PORT=.*/PORT=$port_input/" "$mt_cfg"
+
+      # Update -H <port> in MTProxy.service ExecStart line if service file exists
+      if [ -f "$svc_file" ]; then
+        sed -i -E "s/(ExecStart=.+-H[[:space:]]+)[0-9]+/\\1$port_input/" "$svc_file"
+        echo -e "${CYAN}Reloading systemd daemon and restarting MTProxy.service...${RESET}"
+        systemctl daemon-reload 2>/dev/null || true
+        systemctl restart MTProxy 2>/dev/null || true
+        sleep 1
+        systemctl --no-pager --full status MTProxy 2>/dev/null | sed -n '1,8p'
+      else
+        echo -e "${YELLOW}MTProxy.service unit file not found at ${WHITE}$svc_file${YELLOW}.${RESET}"
+        echo -e "${YELLOW}You may need to re-run the official installer if service fails to start.${RESET}"
+      fi
+    fi
+
+    break
+  done
+}
+
+
+# ===== Configure Host / DNS (for proxy links) =====
+configure_host_dns_interactive() {
+  echo ""
+  echo -e "${MAGENTA}${BOLD}Configure Host / DNS for proxy links${RESET}"
+
+  local current_host
+  local current_dns
+
+  current_host="$(get_config_value "publicHost")"
+  current_dns="$(get_config_value "dnsName")"
+
+  # If no host is set in config, try to detect public IP automatically
+  local detected_ip=""
+  if [ -z "$current_host" ]; then
+    detected_ip="$(detect_public_ip)"
+    if [ -n "$detected_ip" ]; then
+      current_host="$detected_ip"
+    fi
+  fi
+
+  local display_host="$current_host"
+  local display_dns="$current_dns"
+  [ -z "$display_host" ] && display_host="(unknown)"
+  [ -z "$display_dns" ] && display_dns="(not set)"
+
+  echo -e "${CYAN}Detected / current public host/IP:${RESET} ${WHITE}$display_host${RESET}"
+  echo -e "${CYAN}Current DNS / domain:${RESET}           ${WHITE}$display_dns${RESET}"
+  echo ""
+
+  # We do NOT ask for host/IP anymore, only DNS
+  echo -ne "${CYAN}Enter DNS / domain (e.g. proxy.example.com) [${display_dns}]: ${RESET}"
+  read -r new_dns
+  if [ -z "$new_dns" ]; then
+    new_dns="$current_dns"
+  fi
+
+  local final_host="$current_host"
+  local final_dns="$new_dns"
+
+  write_config_values "$final_host" "$final_dns"
+
+  echo ""
+  echo -e "${GREEN}Saved config:${RESET}"
+  echo -e "  publicHost = ${WHITE}${final_host:-'(empty)'}${RESET}"
+  echo -e "  dnsName    = ${WHITE}${final_dns:-'(empty)'}${RESET}"
+}
+
+# ===== Install & update MTPro Monitor Bot =====
+install_or_update_bot() {
+  echo -e "${MAGENTA}${BOLD}╭───────────────────────────────╮${RESET}"
+  echo -e "${MAGENTA}${BOLD}│ ${WHITE}Install / Update Bot${MAGENTA}           │${RESET}"
+  echo -e "${MAGENTA}${BOLD}╰───────────────────────────────╯${RESET}"
+
+  if [ ! -d "$INSTALL_DIR" ]; then
+    echo -e "${CYAN}Creating install directory: ${WHITE}$INSTALL_DIR${RESET}"
+    sudo mkdir -p "$INSTALL_DIR" 2>/dev/null || mkdir -p "$INSTALL_DIR"
+  fi
+
+  if [ -d "$INSTALL_DIR/.git" ]; then
+    echo -e "${CYAN}Repository found. Pulling latest changes...${RESET}"
+    (cd "$INSTALL_DIR" && git pull)
+  else
+    echo -e "${CYAN}Cloning MTproMonitorbot repository into ${WHITE}$INSTALL_DIR${RESET}"
+    git clone https://github.com/h4m1dr/MTproMonitorbot.git "$INSTALL_DIR"
+  fi
+
+  local target_file="$INSTALL_DIR/bot/index.js"
+  local had_token_before="NO"
+  if [ -f "$target_file" ]; then
+    if grep -q 'const TOKEN = "' "$target_file"; then
+      if ! grep -q 'const TOKEN = "TOKEN_HERE"' "$target_file"; then
+        had_token_before="YES"
+      fi
+    fi
+  fi
+
+  echo -e "${CYAN}Running npm install...${RESET}"
+  (cd "$INSTALL_DIR" && npm install)
+
+  if [ "$had_token_before" = "YES" ]; then
+    echo -e "${YELLOW}Existing bot token detected in bot/index.js.${RESET}"
+    echo -ne "${CYAN}Keep current token? [Y/n]: ${RESET}"
+    read -r ans
+    if [[ "$ans" =~ ^[Nn]$ ]]; then
+      if ask_bot_token; then
+        set_token_in_index
+      else
+        echo -e "${YELLOW}Token was not changed. Keeping the existing one.${RESET}"
+      fi
+    else
+      echo -e "${GREEN}Keeping existing bot token.${RESET}"
+    fi
+  else
+    if ask_bot_token; then
+      set_token_in_index
+    else
+      echo -e "${YELLOW}No token was set. You can set it later from Bot Menu (Set / Change Bot Token).${RESET}"
+    fi
+  fi
+
+  # Do NOT ask for default port here; it will be synced from MTProxy or changed from Bot Menu.
+  if [ -d "$INSTALL_DIR/scripts" ]; then
+    chmod +x "$INSTALL_DIR"/scripts/*.sh 2>/dev/null
+  fi
+
+  echo -e "${GREEN}Bot install/update process finished.${RESET}"
+}
+
+# ===== Full install: MTProxy (official) + Bot in one flow =====
+full_install_mtproxy_and_bot() {
+  clear
+  echo -e "${CYAN}${BOLD}MTPro Monitor Bot | Full Install${RESET}"
+  short_status_header
+  echo -e "${MAGENTA}${BOLD}╭───────────────────────────────╮${RESET}"
+  echo -e "${MAGENTA}${BOLD}│ ${WHITE}Full Install (MTProxy + Bot)${MAGENTA} │${RESET}"
+  echo -e "${MAGENTA}${BOLD}╰───────────────────────────────╯${RESET}"
+  echo ""
+
+  if is_full_stack_installed; then
+    echo -e "${GREEN}It looks like MTProxy + Bot are already installed.${RESET}"
+    echo -ne "${CYAN}Completely purge previous install and reinstall everything from scratch? [y/N]: ${RESET}"
+    read -r ans
+    ans=${ans:-N}
+    if [[ "$ans" =~ ^[Yy]$ ]]; then
+      purge_full_stack_install
+    else
+      echo -e "${YELLOW}Skipping full reinstall.${RESET}"
+      read -r -p "Press Enter to return to Prerequisites Menu... " _
+      return
+    fi
+  fi
+
+  echo -e "${CYAN}Step 1/3: Install / update official MTProxy (Hirbod installer).${RESET}"
+  echo -e "${CYAN}You will be asked for PORT and (optional) domain inside that script.${RESET}"
+  echo ""
+
+  if [ ! -f "$INSTALL_DIR/scripts/install_mtproxy_official.sh" ]; then
+    echo -e "${RED}$INSTALL_DIR/scripts/install_mtproxy_official.sh not found.${RESET}"
+    echo -e "${YELLOW}Make sure the installer script exists in the repo.${RESET}"
+    read -r -p "Press Enter to return to Prerequisites Menu... " _
+    return
+  fi
+
+  sudo bash "$INSTALL_DIR/scripts/install_mtproxy_official.sh"
+
+  echo ""
+  echo -e "${GREEN}MTProxy installer finished. Syncing PORT with bot default_port...${RESET}"
+  sync_default_port_from_mtconfig
+
+  echo ""
+  echo -e "${CYAN}Step 2/3: Install / update MTPro Monitor Bot.${RESET}"
+  install_or_update_bot
+
+  echo ""
+  echo -e "${CYAN}Step 3/3: Final sync of default_port from MTProxy (safety).${RESET}"
+  sync_default_port_from_mtconfig
+
+  echo ""
+  echo -e "${GREEN}Full installation (MTProxy + Bot) is complete.${RESET}"
+  read -r -p "Press Enter to return to Prerequisites Menu... " _
+}
+
+
+
+
+# ===== Start bot with pm2 =====
+start_bot() {
+  if ! has_cmd pm2; then
+    echo -e "${RED}pm2 not found. Install pm2 from Prerequisites Menu first.${RESET}"
+    return
+  fi
+
+  if [ ! -d "$INSTALL_DIR" ]; then
+    echo -e "${RED}Install dir $INSTALL_DIR not found. Install bot first.${RESET}"
+    return
+  fi
+
+  echo -e "${CYAN}Starting bot with pm2...${RESET}"
+  (cd "$INSTALL_DIR" && pm2 start bot/index.js --name "$SERVICE_NAME")
+  pm2 save >/dev/null 2>&1
+  echo -e "${GREEN}Bot is now managed by pm2 as: ${WHITE}$SERVICE_NAME${RESET}"
+  echo -e "${YELLOW}To see logs: ${WHITE}pm2 logs $SERVICE_NAME${RESET}"
+}
+
+# ===== Stop bot with pm2 =====
+stop_bot() {
+  if ! has_cmd pm2; then
+    echo -e "${RED}pm2 not found.${RESET}"
+    return
+  fi
+  echo -e "${CYAN}Stopping pm2 process ${WHITE}$SERVICE_NAME${RESET}"
+  pm2 delete "$SERVICE_NAME" >/dev/null 2>&1 || echo -e "${YELLOW}Process not found in pm2.${RESET}"
+}
+
+# ===== Restart bot with pm2 =====
+restart_bot() {
+  if ! has_cmd pm2; then
+    echo -e "${RED}pm2 not found.${RESET}"
+    return
+  fi
+  echo -e "${CYAN}Restarting pm2 process ${WHITE}$SERVICE_NAME${RESET}"
+  pm2 restart "$SERVICE_NAME" >/dev/null 2>&1 || echo -e "${YELLOW}Process not found, try Start Bot first.${RESET}"
+}
+
+# ===== Show pm2 status =====
+show_pm2_status() {
+  if ! has_cmd pm2; then
+    echo -e "${RED}pm2 not found.${RESET}"
+    return
+  fi
+  echo -e "${CYAN}pm2 status:${RESET}"
+  pm2 status
+}
+
+# ===== Manual edit menu (for power users) =====
+manual_edit_menu() {
+  while true; do
+    clear
+    echo -e "${CYAN}${BOLD}MTPro Monitor Bot | Manual Edit${RESET}"
+    short_status_header
+    echo -e "${MAGENTA}${BOLD}╭───────────────────────────────╮${RESET}"
+    echo -e "${MAGENTA}${BOLD}│ ${WHITE}Manual Edit Menu${MAGENTA}              │${RESET}"
+    echo -e "${MAGENTA}${BOLD}╰───────────────────────────────╯${RESET}"
+    echo -e " ${CYAN}[1]${RESET} Edit bot/index.js (change token, commands, etc.)"
+    echo -e " ${CYAN}[2]${RESET} Open scripts directory (shell)"
+    echo -e " ${CYAN}[3]${RESET} Edit data/usage.json"
+    echo -e " ${CYAN}[0]${RESET} Back to Bot Menu"
+    echo ""
+    echo -ne "${WHITE}Select an option: ${RESET}"
+    read -r choice
+    case "$choice" in
+      1)
+        if [ -f "$INSTALL_DIR/bot/index.js" ]; then
+          ${EDITOR:-nano} "$INSTALL_DIR/bot/index.js"
+        else
+          echo -e "${RED}$INSTALL_DIR/bot/index.js not found.${RESET}"
+          read -r -p "Press Enter to continue... " _
+        fi
+        ;;
+      2)
+        if [ -d "$INSTALL_DIR/scripts" ]; then
+          echo -e "${YELLOW}Opening shell in scripts directory.${RESET}"
+          read -r -p "Press Enter to continue... " _
+          (cd "$INSTALL_DIR/scripts" && ${SHELL:-bash})
+        else
+          echo -e "${RED}$INSTALL_DIR/scripts directory not found.${RESET}"
+          read -r -p "Press Enter to continue... " _
+        fi
+        ;;
+      3)
+        if [ -f "$INSTALL_DIR/data/usage.json" ]; then
+          ${EDITOR:-nano} "$INSTALL_DIR/data/usage.json"
+        else
+          echo -e "${RED}$INSTALL_DIR/data/usage.json not found.${RESET}"
+          read -r -p "Press Enter to continue... " _
+        fi
+        ;;
+      0)
+        break
+        ;;
+      *)
+        echo -e "${RED}Invalid option.${RESET}"
+        sleep 1
+        ;;
+    esac
+  done
+}
+
+# ===== Prerequisites menu =====
+prereq_menu() {
+  while true; do
+    clear
+    echo -e "${CYAN}${BOLD}MTPro Monitor Bot | Prerequisites Menu${RESET}"
+    short_status_header
+    echo -e "${MAGENTA}${BOLD}╭───────────────────────────────╮${RESET}"
+    echo -e "${MAGENTA}${BOLD}│ ${WHITE}Prerequisites Menu${MAGENTA}           │${RESET}"
+    echo -e "${MAGENTA}${BOLD}╰───────────────────────────────╯${RESET}"
+    echo -e " ${CYAN}[1]${RESET} Install / Update base packages (git, curl, nodejs, npm) ${YELLOW}(~28.4 MB disk on this VPS)${RESET}"
+    echo -e " ${CYAN}[2]${RESET} Install / Update pm2 ${YELLOW}(~34 MB disk on this VPS)${RESET}"
+    echo -e " ${CYAN}[3]${RESET} Full Install: official MTProxy + MTPro Monitor Bot"
+    echo -e " ${CYAN}[0]${RESET} Back to Main Menu"
+    echo ""
+    echo -ne "${WHITE}Select an option: ${RESET}"
+    read -r choice
+    case "$choice" in
+      1)
+        install_prereqs
+        read -r -p "Press Enter to return to Prerequisites Menu... " _
+        ;;
+      2)
+        install_pm2
+        read -r -p "Press Enter to return to Prerequisites Menu... " _
+        ;;
+      3)
+        full_install_mtproxy_and_bot
+        ;;
+      0)
+        break
+        ;;
+      *)
+        echo -e "${RED}Invalid option.${RESET}"
+        sleep 1
+        ;;
+    esac
+  done
+}
+
+
+
+
+# ===== Bot menu =====
+bot_menu() {
+  while true; do
+    clear
+    echo -e "${CYAN}${BOLD}MTPro Monitor Bot | Bot Menu${RESET}"
+    short_status_header
+    echo -e "${MAGENTA}${BOLD}╭───────────────────────────────╮${RESET}"
+    echo -e "${MAGENTA}${BOLD}│ ${WHITE}Bot Menu${MAGENTA}                     │${RESET}"
+    echo -e "${MAGENTA}${BOLD}╰───────────────────────────────╯${RESET}"
+    echo -e " ${CYAN}[1]${RESET} Set / Change Bot Token"
+    echo -e " ${CYAN}[2]${RESET} Set / Change Default Proxy Port"
+    echo -e " ${CYAN}[3]${RESET} Configure Host / DNS for proxy links"
+    echo -e " ${CYAN}[4]${RESET} Start Bot (pm2)"
+    echo -e " ${CYAN}[5]${RESET} Stop Bot (pm2)"
+    echo -e " ${CYAN}[6]${RESET} Restart Bot (pm2)"
+    echo -e " ${CYAN}[7]${RESET} Show pm2 status"
+    echo -e " ${CYAN}[8]${RESET} Manual Edit (index.js, scripts, usage.json)"
+    echo -e " ${CYAN}[0]${RESET} Back to Main Menu"
+    echo ""
+    echo -ne "${WHITE}Select an option: ${RESET}"
+    read -r choice
+    case "$choice" in
+      1)
+        # Token menu with warning if already set
+        local_target_file="$INSTALL_DIR/bot/index.js"
+        if [ -f "$local_target_file" ] && grep -q 'const TOKEN = "' "$local_target_file"; then
+          if ! grep -q 'const TOKEN = "TOKEN_HERE"' "$local_target_file"; then
+            echo -e "${YELLOW}Existing bot token detected in bot/index.js.${RESET}"
+            echo -ne "${CYAN}Do you want to replace it? [y/N]: ${RESET}"
+            read -r ans
+            if [[ ! "$ans" =~ ^[Yy]$ ]]; then
+              echo -e "${GREEN}Keeping current token.${RESET}"
+              read -r -p "Press Enter to return to Bot Menu... " _
+              continue
+            fi
+          fi
+        fi
+        if ask_bot_token; then
+          set_token_in_index
+        fi
+        read -r -p "Press Enter to return to Bot Menu... " _
+        ;;
+      2)
+        set_default_port_interactive
+        read -r -p "Press Enter to return to Bot Menu... " _
+        ;;
+      3)
+        configure_host_dns_interactive
+        read -r -p "Press Enter to return to Bot Menu... " _
+        ;;
+      4)
+        start_bot
+        read -r -p "Press Enter to return to Bot Menu... " _
+        ;;
+      5)
+        stop_bot
+        read -r -p "Press Enter to return to Bot Menu... " _
+        ;;
+      6)
+        restart_bot
+        read -r -p "Press Enter to return to Bot Menu... " _
+        ;;
+      7)
+        show_pm2_status
+        read -r -p "Press Enter to return to Bot Menu... " _
+        ;;
+      8)
+        manual_edit_menu
+        ;;
+      0)
+        break
+        ;;
+      *)
+        echo -e "${RED}Invalid option.${RESET}"
+        sleep 1
+        ;;
+    esac
+  done
+}
+
+
+# ===== Cleanup menu =====
+cleanup_menu() {
+  while true; do
+    clear
+    echo -e "${CYAN}${BOLD}MTPro Monitor Bot | Cleanup Menu${RESET}"
+    short_status_header
+    echo -e "${MAGENTA}${BOLD}╭───────────────────────────────╮${RESET}"
+    echo -e "${MAGENTA}${BOLD}│ ${WHITE}Cleanup / Remove Menu${MAGENTA}       │${RESET}"
+    echo -e "${MAGENTA}${BOLD}╰───────────────────────────────╯${RESET}"
+    echo -e " ${CYAN}[1]${RESET} Stop bot and remove pm2 process"
+    echo -e " ${CYAN}[2]${RESET} Remove bot install folder ($INSTALL_DIR)"
+    echo -e " ${CYAN}[3]${RESET} Clear npm cache (optional cleanup)"
+    echo -e " ${CYAN}[0]${RESET} Back to Main Menu"
+    echo ""
+    echo -ne "${WHITE}Select an option: ${RESET}"
+    read -r choice
+    case "$choice" in
+      1)
+        stop_bot
+        read -r -p "Press Enter to return to Cleanup Menu... " _
+        ;;
+      2)
+        echo -ne "${CYAN}Are you sure you want to remove ${WHITE}$INSTALL_DIR${CYAN}? [y/N]: ${RESET}"
+        read -r ans
+        if [[ "$ans" =~ ^[Yy]$ ]]; then
+          sudo rm -rf "$INSTALL_DIR" 2>/dev/null || rm -rf "$INSTALL_DIR"
+          echo -e "${GREEN}Removed ${WHITE}$INSTALL_DIR${RESET}"
+        else
+          echo -e "${YELLOW}Skip removing folder.${RESET}"
+        fi
+        read -r -p "Press Enter to return to Cleanup Menu... " _
+        ;;
+      3)
+        if has_cmd npm; then
+          echo -e "${CYAN}Clearing npm cache...${RESET}"
+          npm cache clean --force
+          echo -e "${GREEN}npm cache cleared.${RESET}"
+        else
+          echo -e "${RED}npm not found. Cannot clear cache.${RESET}"
+        fi
+        read -r -p "Press Enter to return to Cleanup Menu... " _
+        ;;
+      0)
+        break
+        ;;
+      *)
+        echo -e "${RED}Invalid option.${RESET}"
+        sleep 1
+        ;;
+    esac
+  done
+}
+
+# ===== Main menu =====
+main_menu() {
+  while true; do
+    clear
+    echo -e "${CYAN}${BOLD}"
+    echo -e "███╗   ███╗████████╗██████╗ ██████╗  ██████╗ "
+    echo -e "████╗ ████║╚══██╔══╝██╔══██╗██╔══██╗██╔════╝ "
+    echo -e "██╔████╔██║   ██║   ██████╔╝██║  ██║██║  ███╗"
+    echo -e "██║╚██╔╝██║   ██║   ██╔══██╗██║  ██║██║   ██║"
+    echo -e "██║ ╚═╝ ██║   ██║   ██║  ██║██████╔╝╚██████╔╝"
+    echo -e "╚═╝     ╚═╝   ╚═╝   ╚═╝  ╚═╝╚═════╝  ╚═════╝ "
+    echo -e "     ${WHITE}MTPro Monitor Bot${RESET}${CYAN} | ${WHITE}Auto Installer${RESET}"
+    echo -e "${RESET}"
+    short_status_header
+    echo -e "${MAGENTA}${BOLD}╭───────────────────────────────╮${RESET}"
+    echo -e "${MAGENTA}${BOLD}│ ${WHITE}Main Menu${MAGENTA}                     │${RESET}"
+    echo -e "${MAGENTA}${BOLD}╰───────────────────────────────╯${RESET}"
+    echo -e " ${CYAN}[1]${RESET} Prerequisites Menu (install base packages, pm2, full install)"
+    echo -e " ${CYAN}[2]${RESET} Bot Menu (token, port, host/DNS, pm2 control, manual edit)"
+    echo -e " ${CYAN}[3]${RESET} MTProxy Menu (run official installer / advanced options)"
+    echo -e " ${CYAN}[4]${RESET} Cleanup Menu (stop, remove, clean cache)"
+    echo -e " ${CYAN}[0]${RESET} Exit"
+    echo ""
+    echo -ne "${WHITE}Select an option: ${RESET}"
+    read -r choice
+    case "$choice" in
+      1)
+        prereq_menu
+        ;;
+      2)
+        if ! is_full_stack_installed; then
+          echo -e "${RED}Full installation has not been completed yet.${RESET}"
+          echo -e "${CYAN}Go to Prerequisites Menu → [3] Full Install (MTProxy + Bot) first.${RESET}"
+          read -r -p "Press Enter to return to Main Menu... " _
+        else
+          bot_menu
+        fi
+        ;;
+      3)
+        if ! is_mtproxy_installed; then
+          echo -e "${RED}MTProxy is not installed yet.${RESET}"
+          echo -e "${CYAN}Go to Prerequisites Menu → [3] Full Install (MTProxy + Bot) first.${RESET}"
+          read -r -p "Press Enter to return to Main Menu... " _
+        else
+          install_mtproxy_official_menu
+        fi
+        ;;
+      4)
+        cleanup_menu
+        ;;
+      0)
+        echo -e "${GREEN}Bye.${RESET}"
+        exit 0
+        ;;
+      *)
+        echo -e "${RED}Invalid option.${RESET}"
+        sleep 1
+        ;;
+    esac
+  done
+}
+
+
+# ===== Start script =====
+auto_first_run_setup
+main_menu
