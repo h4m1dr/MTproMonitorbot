@@ -282,30 +282,6 @@ This menu **never touches other `/opt` projects** and does **not** uninstall MTP
 
 ---
 
-## 🔁 Updating the Installer
-
-When you change the script on your local machine and push to GitHub:
-
-### On your local (Windows / dev machine):
-
-```bash
-git add mtpromonitor.sh README.md
-git commit -m "update installer menus and README"
-git push
-```
-
-### On the server:
-
-```bash
-cd /opt/MTproMonitorbot
-sudo git pull
-sudo bash mtpromonitor.sh
-```
-
-No extra `chmod` commands are needed — the script handles that automatically.
-
----
-
 ## 📦 Repository
 
 Project GitHub:
