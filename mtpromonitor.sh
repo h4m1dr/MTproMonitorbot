@@ -253,7 +253,6 @@ EOF
 }
 
 # ===== Short status line under header =====
-# ===== Short status line under header =====
 short_status_header() {
   # ----- Prerequisites: show installed commands -----
   local prereq_list=""
@@ -270,9 +269,16 @@ short_status_header() {
     prereq_display="$prereq_list"
   fi
 
+  local prereq_colored
+  if [ "$prereq_display" = "no" ]; then
+    prereq_colored="${RED}no${RESET}"
+  else
+    prereq_colored="${GREEN}${prereq_display}${RESET}"
+  fi
+
   # ----- Proxy status: systemd + config (PORT / TLS) -----
   local proxy_status="OFF"
-  local proxy_ports=""
+  local proxy_port=""
   local tls_domain=""
 
   # Check via systemd
@@ -284,7 +290,7 @@ short_status_header() {
     fi
   fi
 
-  # Fallback: process name
+  # Fallback: process name only (no systemd)
   if [ "$proxy_status" = "OFF" ] && pgrep -fi "$PROXY_PROCESS_PATTERN" >/dev/null 2>&1; then
     proxy_status="RUNNING(no systemd)"
   fi
@@ -295,7 +301,7 @@ short_status_header() {
     local p
     p="$(grep '^PORT=' "$mt_cfg" | head -n1 | cut -d'=' -f2 | tr -d '[:space:]')"
     if echo "$p" | grep -Eq '^[0-9]+$'; then
-      proxy_ports="$p"
+      proxy_port="$p"
     fi
   fi
 
@@ -309,7 +315,7 @@ short_status_header() {
     local p2
     p2="$(echo "$line" | sed -E 's/.*-H[[:space:]]+([0-9]+).*/\1/' || true)"
     if echo "$p2" | grep -Eq '^[0-9]+$'; then
-      proxy_ports="$p2"
+      proxy_port="$p2"
     fi
 
     # Extract -D <tls_domain>
@@ -322,37 +328,47 @@ short_status_header() {
 
   local proxy_summary
   if [ "$proxy_status" = "OFF" ]; then
-    proxy_summary="OFF"
+    proxy_summary="${RED}OFF${RESET}"
   else
-    proxy_summary="$proxy_status"
-    if [ -n "$proxy_ports" ]; then
-      proxy_summary="${proxy_summary}(${proxy_ports})"
-    fi
-    if [ -n "$tls_domain" ]; then
-      proxy_summary="${proxy_summary},TLS=${tls_domain}"
+    proxy_summary="${GREEN}${proxy_status}${RESET}"
+    if [ -n "$proxy_port" ]; then
+      proxy_summary="${proxy_summary} (port=${WHITE}${proxy_port}${RESET}"
+      if [ -n "$tls_domain" ]; then
+        proxy_summary="${proxy_summary}, tls=${WHITE}${tls_domain}${RESET})"
+      else
+        proxy_summary="${proxy_summary})"
+      fi
+    elif [ -n "$tls_domain" ]; then
+      proxy_summary="${proxy_summary} (tls=${WHITE}${tls_domain}${RESET})"
     fi
   fi
 
-  # ----- Bot token status + show token (masked) -----
+  # ----- Bot token status + masked value -----
   local token_status="NOT INSTALLED"
-  local token_label=""
+  local token_display="NOT INSTALLED"
 
   if [ -f "$INSTALL_DIR/bot/index.js" ]; then
-    # Extract const TOKEN = "....";
     local tok
     tok="$(sed -n 's/.*const TOKEN = "\([^"]*\)".*/\1/p' "$INSTALL_DIR/bot/index.js" | head -n1)"
     if [ -z "$tok" ] || [ "$tok" = "TOKEN_HERE" ]; then
       token_status="NOT SET"
+      token_display="${YELLOW}NOT SET${RESET}"
     else
       token_status="SET"
       # Mask token for safety (first 6 + last 4)
       local len=${#tok}
+      local masked
       if [ "$len" -le 10 ]; then
-        token_label="$tok"
+        masked="$tok"
       else
-        token_label="${tok:0:6}...${tok: -4}"
+        masked="${tok:0:6}...${tok: -4}"
       fi
+      token_display="${GREEN}${masked}${RESET}"
     fi
+  fi
+
+  if [ "$token_status" = "NOT INSTALLED" ]; then
+    token_display="${RED}NOT INSTALLED${RESET}"
   fi
 
   # ----- Network info: public IP + DNS + default_port -----
@@ -367,7 +383,6 @@ short_status_header() {
     ip_display="$(detect_public_ip)"
   fi
   [ -z "$ip_display" ] && ip_display="(unknown)"
-
   [ -z "$current_dns" ] && current_dns="(not set)"
 
   local default_port_display="-"
@@ -380,14 +395,18 @@ short_status_header() {
     fi
   fi
 
-  # ----- Final output -----
-  echo -e "${WHITE}${BOLD}Status:${RESET} Prereqs=${GREEN}$prereq_display${RESET}  Proxy=${YELLOW}$proxy_summary${RESET}  BotToken=${YELLOW}$token_status${RESET}"
-  if [ -n "$token_label" ]; then
-    echo -e "        BotTokenValue=${WHITE}$token_label${RESET}"
-  fi
-  echo -e "${WHITE}Net:${RESET}    IP=${WHITE}$ip_display${RESET}  DNS=${WHITE}$current_dns${RESET}  DefaultPort=${WHITE}$default_port_display${RESET}"
+  # ----- Final pretty output -----
+  echo -e "${WHITE}${BOLD}Status:${RESET}"
+  echo -e "  Prereqs : $prereq_colored"
+  echo -e "  Proxy   : $proxy_summary"
+  echo -e "  BotToken: $token_display"
+  echo -e "${WHITE}Net:${RESET}"
+  echo -e "  IP         : ${WHITE}$ip_display${RESET}"
+  echo -e "  DNS        : ${WHITE}$current_dns${RESET}"
+  echo -e "  DefaultPort: ${WHITE}$default_port_display${RESET}"
   echo ""
 }
+
 
 
 # ===== Install prerequisites via apt (Debian/Ubuntu) =====
