@@ -1,6 +1,6 @@
 # MTPro Monitor Bot — Auto Installer
 
-**Version:** v1.0.0
+**Version:** v0.3.1
 
 This project provides a fully automated, menu-based installer and manager for **MTPro Monitor Bot** and **official C MTProxy** on Linux servers.  
 It aims to make setup so simple that the user only runs **one script** and uses menus — no manual editing, no complex commands.
