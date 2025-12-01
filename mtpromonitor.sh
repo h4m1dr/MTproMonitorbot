@@ -253,43 +253,142 @@ EOF
 }
 
 # ===== Short status line under header =====
+# ===== Short status line under header =====
 short_status_header() {
-  # Prerequisites summary
-  local prereq_status="OK"
-  local missing=""
-  for cmd in node npm git; do
-    if ! has_cmd "$cmd"; then
-      prereq_status="MISSING"
-      missing="$missing $cmd"
+  # ----- Prerequisites: show installed commands -----
+  local prereq_list=""
+  for cmd in git curl node npm; do
+    if has_cmd "$cmd"; then
+      prereq_list="$prereq_list $cmd"
     fi
   done
 
-  # Proxy status (stats endpoint or process names)
-  local proxy_status="UNKNOWN"
-  if has_cmd curl && curl -s --max-time 1 "$PROXY_STATS_URL" >/dev/null 2>&1; then
-    proxy_status="ON"
-  elif pgrep -fi "$PROXY_PROCESS_PATTERN" >/dev/null 2>&1; then
-    proxy_status="RUNNING(no stats)"
+  local prereq_display
+  if [ -z "$prereq_list" ]; then
+    prereq_display="no"
   else
-    proxy_status="OFF"
+    prereq_display="$prereq_list"
   fi
 
-  # Bot token status
-  local token_status="NOT INSTALLED"
-  if [ -f "$INSTALL_DIR/bot/index.js" ]; then
-    if grep -q 'const TOKEN = "TOKEN_HERE"' "$INSTALL_DIR/bot/index.js" 2>/dev/null; then
-      token_status="NOT SET"
-    else
-      token_status="SET"
+  # ----- Proxy status: systemd + config (PORT / TLS) -----
+  local proxy_status="OFF"
+  local proxy_ports=""
+  local tls_domain=""
+
+  # Check via systemd
+  if command -v systemctl >/dev/null 2>&1; then
+    if systemctl is-active MTProxy >/dev/null 2>&1; then
+      proxy_status="RUNNING"
+    elif systemctl list-unit-files 2>/dev/null | grep -q "^MTProxy.service"; then
+      proxy_status="INSTALLED"
     fi
   fi
 
-  echo -e "${WHITE}${BOLD}Status:${RESET} Prereqs=${YELLOW}$prereq_status${RESET}  Proxy=${YELLOW}$proxy_status${RESET}  BotToken=${YELLOW}$token_status${RESET}"
-  if [ "$prereq_status" = "MISSING" ] && [ -n "$missing" ]; then
-    echo -e "${YELLOW}Missing:${RESET}$missing"
+  # Fallback: process name
+  if [ "$proxy_status" = "OFF" ] && pgrep -fi "$PROXY_PROCESS_PATTERN" >/dev/null 2>&1; then
+    proxy_status="RUNNING(no systemd)"
   fi
+
+  # Read PORT from mtconfig.conf (official installer)
+  local mt_cfg="/opt/MTProxy/objs/bin/mtconfig.conf"
+  if [ -f "$mt_cfg" ]; then
+    local p
+    p="$(grep '^PORT=' "$mt_cfg" | head -n1 | cut -d'=' -f2 | tr -d '[:space:]')"
+    if echo "$p" | grep -Eq '^[0-9]+$'; then
+      proxy_ports="$p"
+    fi
+  fi
+
+  # Read PORT and TLS from MTProxy.service ExecStart (if exists)
+  local svc_file="/etc/systemd/system/MTProxy.service"
+  if [ -f "$svc_file" ]; then
+    local line
+    line="$(grep '^ExecStart=' "$svc_file" | head -n1 || true)"
+
+    # Extract -H <port>
+    local p2
+    p2="$(echo "$line" | sed -E 's/.*-H[[:space:]]+([0-9]+).*/\1/' || true)"
+    if echo "$p2" | grep -Eq '^[0-9]+$'; then
+      proxy_ports="$p2"
+    fi
+
+    # Extract -D <tls_domain>
+    local tls
+    tls="$(echo "$line" | sed -E 's/.*-D[[:space:]]+([^[:space:]]+).*/\1/' || true)"
+    if [ -n "$tls" ] && ! echo "$tls" | grep -q "ExecStart"; then
+      tls_domain="$tls"
+    fi
+  fi
+
+  local proxy_summary
+  if [ "$proxy_status" = "OFF" ]; then
+    proxy_summary="OFF"
+  else
+    proxy_summary="$proxy_status"
+    if [ -n "$proxy_ports" ]; then
+      proxy_summary="${proxy_summary}(${proxy_ports})"
+    fi
+    if [ -n "$tls_domain" ]; then
+      proxy_summary="${proxy_summary},TLS=${tls_domain}"
+    fi
+  fi
+
+  # ----- Bot token status + show token (masked) -----
+  local token_status="NOT INSTALLED"
+  local token_label=""
+
+  if [ -f "$INSTALL_DIR/bot/index.js" ]; then
+    # Extract const TOKEN = "....";
+    local tok
+    tok="$(sed -n 's/.*const TOKEN = "\([^"]*\)".*/\1/p' "$INSTALL_DIR/bot/index.js" | head -n1)"
+    if [ -z "$tok" ] || [ "$tok" = "TOKEN_HERE" ]; then
+      token_status="NOT SET"
+    else
+      token_status="SET"
+      # Mask token for safety (first 6 + last 4)
+      local len=${#tok}
+      if [ "$len" -le 10 ]; then
+        token_label="$tok"
+      else
+        token_label="${tok:0:6}...${tok: -4}"
+      fi
+    fi
+  fi
+
+  # ----- Network info: public IP + DNS + default_port -----
+  local current_host
+  local current_dns
+  current_host="$(get_config_value "publicHost")"
+  current_dns="$(get_config_value "dnsName")"
+
+  # If host not set in config, try auto-detect public IP
+  local ip_display="$current_host"
+  if [ -z "$ip_display" ]; then
+    ip_display="$(detect_public_ip)"
+  fi
+  [ -z "$ip_display" ] && ip_display="(unknown)"
+
+  [ -z "$current_dns" ] && current_dns="(not set)"
+
+  local default_port_display="-"
+  local default_port_file="$INSTALL_DIR/data/default_port"
+  if [ -f "$default_port_file" ]; then
+    local dp
+    dp="$(cat "$default_port_file" 2>/dev/null)"
+    if echo "$dp" | grep -Eq '^[0-9]+$'; then
+      default_port_display="$dp"
+    fi
+  fi
+
+  # ----- Final output -----
+  echo -e "${WHITE}${BOLD}Status:${RESET} Prereqs=${GREEN}$prereq_display${RESET}  Proxy=${YELLOW}$proxy_summary${RESET}  BotToken=${YELLOW}$token_status${RESET}"
+  if [ -n "$token_label" ]; then
+    echo -e "        BotTokenValue=${WHITE}$token_label${RESET}"
+  fi
+  echo -e "${WHITE}Net:${RESET}    IP=${WHITE}$ip_display${RESET}  DNS=${WHITE}$current_dns${RESET}  DefaultPort=${WHITE}$default_port_display${RESET}"
   echo ""
 }
+
 
 # ===== Install prerequisites via apt (Debian/Ubuntu) =====
 install_prereqs() {
