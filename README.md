@@ -1,4 +1,7 @@
-# MTPro Monitor Bot — Auto Installer
+# 🚧 MTPro Monitor Bot — Auto Installer 🚧
+
+### ⚠️ THIS PROJECT IS CURRENTLY UNDER DEVELOPMENT  
+### ⚠️ PLEASE DO NOT CLONE OR INSTALL YET
 
 **Version:** v0.3.1
 
