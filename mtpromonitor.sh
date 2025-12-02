@@ -160,9 +160,18 @@ auto_first_run_setup() {
   # Make this file executable
   $SUDO_CMD chmod +x "$ROOT_DIR/$(basename "$0")" 2>/dev/null || true
 
+  # Also make top-level helper scripts executable (Python bot setup, legacy setup)
+  if [ -f "$ROOT_DIR/setup_pybot.sh" ]; then
+    $SUDO_CMD chmod +x "$ROOT_DIR/setup_pybot.sh" 2>/dev/null || true
+  fi
+  if [ -f "$ROOT_DIR/setup.sh" ]; then
+    $SUDO_CMD chmod +x "$ROOT_DIR/setup.sh" 2>/dev/null || true
+  fi
+
   # NO auto-install, NO questions, NO MTProxy checks  
-  # Everything related to installation happens ONLY inside Prerequisites Menu
+  # Everything related to installation happens ONLY inside menus
 }
+
 
 
 # ===== Helper: find a free port (default first, then random range) =====
@@ -1027,6 +1036,107 @@ bot_menu() {
 }
 
 
+
+# ===== Python bot (Option B, systemd-based) =====
+
+PYBOT_SERVICE_NAME="mtprobot"
+
+pybot_status() {
+  if command -v systemctl >/dev/null 2>&1; then
+    if systemctl is-active --quiet "$PYBOT_SERVICE_NAME"; then
+      echo -e "${GREEN}Python bot service (${WHITE}$PYBOT_SERVICE_NAME${GREEN}) is ACTIVE.${RESET}"
+    elif systemctl list-unit-files 2>/dev/null | grep -q "^${PYBOT_SERVICE_NAME}.service"; then
+      echo -e "${YELLOW}Python bot service (${WHITE}$PYBOT_SERVICE_NAME${YELLOW}) is INSTALLED but INACTIVE.${RESET}"
+    else
+      echo -e "${RED}Python bot service (${WHITE}$PYBOT_SERVICE_NAME${RED}) is NOT INSTALLED.${RESET}"
+    fi
+  else
+    echo -e "${RED}systemd not found. Python bot service cannot be managed automatically.${RESET}"
+  fi
+}
+
+pybot_install_update() {
+  local ROOT_DIR
+  ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+
+  if [ ! -f "$ROOT_DIR/setup_pybot.sh" ]; then
+    echo -e "${RED}setup_pybot.sh not found in project root (${WHITE}$ROOT_DIR${RED}).${RESET}"
+    echo -e "${YELLOW}Make sure you created it as discussed (Python bot installer).${RESET}"
+    read -r -p "Press Enter to return to Python Bot Menu... " _
+    return
+  fi
+
+  echo -e "${CYAN}Running Python bot installer (setup_pybot.sh)...${RESET}"
+  bash "$ROOT_DIR/setup_pybot.sh"
+  echo -e "${GREEN}Python bot installer finished.${RESET}"
+  read -r -p "Press Enter to return to Python Bot Menu... " _
+}
+
+pybot_start() {
+  if ! command -v systemctl >/dev/null 2>&1; then
+    echo -e "${RED}systemd not found. Cannot start Python bot service.${RESET}"
+    return
+  fi
+  echo -e "${CYAN}Starting Python bot service (${WHITE}$PYBOT_SERVICE_NAME${CYAN})...${RESET}"
+  sudo systemctl start "$PYBOT_SERVICE_NAME" || true
+  pybot_status
+  read -r -p "Press Enter to return to Python Bot Menu... " _
+}
+
+pybot_stop() {
+  if ! command -v systemctl >/dev/null 2>&1; then
+    echo -e "${RED}systemd not found. Cannot stop Python bot service.${RESET}"
+    return
+  fi
+  echo -e "${CYAN}Stopping Python bot service (${WHITE}$PYBOT_SERVICE_NAME${CYAN})...${RESET}"
+  sudo systemctl stop "$PYBOT_SERVICE_NAME" || true
+  pybot_status
+  read -r -p "Press Enter to return to Python Bot Menu... " _
+}
+
+pybot_show_status() {
+  if ! command -v systemctl >/dev/null 2>&1; then
+    echo -e "${RED}systemd not found. Cannot show Python bot service status.${RESET}"
+    read -r -p "Press Enter to return to Python Bot Menu... " _
+    return
+  fi
+  pybot_status
+  echo
+  systemctl status "$PYBOT_SERVICE_NAME" --no-pager || true
+  read -r -p "Press Enter to return to Python Bot Menu... " _
+}
+
+pybot_menu() {
+  while true; do
+    clear
+    echo -e "${CYAN}${BOLD}MTPro Monitor Bot | Python Bot Menu (Option B)${RESET}"
+    short_status_header
+    echo -e "${MAGENTA}${BOLD}╭───────────────────────────────╮${RESET}"
+    echo -e "${MAGENTA}${BOLD}│ ${WHITE}Python Bot Menu (systemd)${MAGENTA}      │${RESET}"
+    echo -e "${MAGENTA}${BOLD}╰───────────────────────────────╯${RESET}"
+    echo -e " ${CYAN}[1]${RESET} Install / Update Python bot (setup_pybot.sh)"
+    echo -e " ${CYAN}[2]${RESET} Start Python bot service (${WHITE}mtprobot${RESET})"
+    echo -e " ${CYAN}[3]${RESET} Stop Python bot service (${WHITE}mtprobot${RESET})"
+    echo -e " ${CYAN}[4]${RESET} Show Python bot service status"
+    echo -e " ${CYAN}[0]${RESET} Back to Main Menu"
+    echo ""
+    echo -ne "${WHITE}Select an option: ${RESET}"
+    read -r choice
+    case "$choice" in
+      1) pybot_install_update ;;
+      2) pybot_start ;;
+      3) pybot_stop ;;
+      4) pybot_show_status ;;
+      0) break ;;
+      *)
+        echo -e "${RED}Invalid option.${RESET}"
+        sleep 1
+        ;;
+    esac
+  done
+}
+
+
 # ===== Cleanup menu =====
 cleanup_menu() {
   while true; do
@@ -1098,9 +1208,10 @@ main_menu() {
     echo -e "${MAGENTA}${BOLD}│ ${WHITE}Main Menu${MAGENTA}                     │${RESET}"
     echo -e "${MAGENTA}${BOLD}╰───────────────────────────────╯${RESET}"
     echo -e " ${CYAN}[1]${RESET} Prerequisites Menu (install base packages, pm2, full install)"
-    echo -e " ${CYAN}[2]${RESET} Bot Menu (token, port, host/DNS, pm2 control, manual edit)"
+    echo -e " ${CYAN}[2]${RESET} Bot Menu (Node.js + pm2, legacy)"
     echo -e " ${CYAN}[3]${RESET} MTProxy Menu (run official installer / advanced options)"
     echo -e " ${CYAN}[4]${RESET} Cleanup Menu (stop, remove, clean cache)"
+    echo -e " ${CYAN}[5]${RESET} Python Bot Menu (Option B, systemd-based)"
     echo -e " ${CYAN}[0]${RESET} Exit"
     echo ""
     echo -ne "${WHITE}Select an option: ${RESET}"
@@ -1111,8 +1222,8 @@ main_menu() {
         ;;
       2)
         if ! is_full_stack_installed; then
-          echo -e "${RED}Full installation has not been completed yet.${RESET}"
-          echo -e "${CYAN}Go to Prerequisites Menu → [3] Full Install (MTProxy + Bot) first.${RESET}"
+          echo -e "${RED}Full installation (Node-based) has not been completed yet.${RESET}"
+          echo -e "${CYAN}Go to Prerequisites Menu → [3] Full Install (MTProxy + Bot) first, or use Python Bot Menu instead.${RESET}"
           read -r -p "Press Enter to return to Main Menu... " _
         else
           bot_menu
@@ -1121,7 +1232,7 @@ main_menu() {
       3)
         if ! is_mtproxy_installed; then
           echo -e "${RED}MTProxy is not installed yet.${RESET}"
-          echo -e "${CYAN}Go to Prerequisites Menu → [3] Full Install (MTProxy + Bot) first.${RESET}"
+          echo -e "${CYAN}Go to Prerequisites Menu → [3] Full Install (MTProxy + Bot) or run official installer.${RESET}"
           read -r -p "Press Enter to return to Main Menu... " _
         else
           install_mtproxy_official_menu
@@ -1129,6 +1240,9 @@ main_menu() {
         ;;
       4)
         cleanup_menu
+        ;;
+      5)
+        pybot_menu
         ;;
       0)
         echo -e "${GREEN}Bye.${RESET}"
@@ -1141,6 +1255,7 @@ main_menu() {
     esac
   done
 }
+
 
 
 # ===== Start script =====
